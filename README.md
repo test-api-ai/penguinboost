@@ -1,7 +1,15 @@
 # PenguinBoost
 
 
-## 必要環境
+## インストール
+
+```bash
+pip install penguinboost
+```
+
+Linux / Windows / macOS (Python 3.9–3.12) 向けのビルド済み wheel を提供しています。
+
+### ソースからビルドする場合（開発者向け）
 
 | 要件 | バージョン |
 |---|---|
@@ -11,28 +19,16 @@
 | C++ コンパイラ | C++17 対応（GCC 7+ / Clang 5+ / MSVC 2017+） |
 | pybind11 | >= 2.10（ビルド時のみ） |
 
-> **注意:** コアの計算エンジンは C++ で実装されており、インストール時に C++ のコンパイルが行われます。コンパイラが事前にインストールされている必要があります。
+```bash
+git clone https://github.com/test-api-ai/penguinboost.git
+cd penguinboost
+pip install -e ".[dev]"
+```
+
+> **注意:** ソースビルドには C++ コンパイラが必要です。
 > - macOS: `xcode-select --install`
 > - Ubuntu/Debian: `sudo apt install build-essential`
 > - Windows: Visual Studio Build Tools（C++ ワークロード付き）
-
-## インストール
-
-```bash
-# pybind11 を先にインストール
-pip install pybind11
-
-# ソースからインストール（C++ 拡張モジュールがビルドされます）
-git clone https://github.com/test-api-ai/penguinboost.git
-cd penguinboost
-pip install .
-```
-
-開発用（編集可能インストール）:
-
-```bash
-pip install -e ".[dev]"
-```
 
 ## クイックスタート
 

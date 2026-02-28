@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "penguinboost"
-version = "0.3.3"
-description = "Hybrid gradient boosting fusing LightGBM, CatBoost, and XGBoost techniques with financial-specific overfitting resistance."
+version = "0.3.4"
+description = "Hybrid gradient boosting with built-in resistance to financial overfitting."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
     {name = "S.I", email = "test_api_ai@proton.me"},
 ]
 keywords = [
-    "gradient boosting", "gbdt", "machine learning", "xgboost",
-    "lightgbm", "catboost", "finance", "numerai", "quantitative",
+    "gradient boosting", "gbdt", "machine learning", "finance",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
