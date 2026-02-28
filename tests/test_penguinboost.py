@@ -678,7 +678,7 @@ class TestV2FullIntegration:
 
     def test_version_updated(self):
         import penguinboost
-        assert penguinboost.__version__ == "0.3.0"
+        assert penguinboost.__version__ == "0.3.1"
 
     def test_quantile_regressor_exported(self):
         from penguinboost import PenguinBoostQuantileRegressor

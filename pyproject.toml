@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "penguinboost"
-version = "0.3.0"
+version = "0.3.1"
 description = "Hybrid gradient boosting library fusing LightGBM and CatBoost techniques"
 requires-python = ">=3.9"
 dependencies = [
