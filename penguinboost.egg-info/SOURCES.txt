@@ -1,5 +1,6 @@
 LICENSE
 NOTICE
+README.md
 pyproject.toml
 setup.py
 penguinboost/__init__.py
@@ -34,4 +35,5 @@ penguinboost/objectives/ranking.py
 penguinboost/objectives/regression.py
 penguinboost/objectives/survival.py
 tests/__init__.py
+tests/bench_vs_lightgbm.py
 tests/test_penguinboost.py

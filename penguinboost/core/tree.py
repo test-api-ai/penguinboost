@@ -202,12 +202,13 @@ class DecisionTree:
         leaves = []
         n_leaves = 1
 
-        split = self._find_split(root, X_binned, gradients, hessians)
+        split, root_hist = self._find_split_with_hist(root, X_binned, gradients, hessians)
         if split is not None:
-            heapq.heappush(leaves, (-split[2], id(root), root, split))
+            heapq.heappush(leaves, (-split[2], id(root), root, split, root_hist))
 
         while leaves and n_leaves < self.max_leaves:
-            neg_gain, _, node, (feat, bin_thresh, gain, nan_dir) = heapq.heappop(leaves)
+            neg_gain, _, node, (feat, bin_thresh, gain, nan_dir), node_hist = \
+                heapq.heappop(leaves)
 
             if node.depth >= self.max_depth:
                 continue
@@ -216,12 +217,17 @@ class DecisionTree:
                               X_binned, gradients, hessians)
             n_leaves += 1
 
-            for child in (node.left, node.right):
+            # Subtraction trick: one build + one subtract instead of two builds
+            left_hist, right_hist = self._compute_children_hists(
+                node, node_hist, X_binned, gradients, hessians)
+
+            for child, child_hist in ((node.left, left_hist), (node.right, right_hist)):
                 if child.depth < self.max_depth:
-                    child_split = self._find_split(child, X_binned, gradients, hessians)
+                    child_split, child_hist = self._find_split_with_hist(
+                        child, X_binned, gradients, hessians, hist=child_hist)
                     if child_split is not None:
                         heapq.heappush(leaves, (-child_split[2], id(child),
-                                                child, child_split))
+                                                child, child_split, child_hist))
 
     def _build_symmetric(self, root, X_binned, gradients, hessians):
         """Symmetric growth: all nodes at same depth use the same split."""
@@ -272,19 +278,33 @@ class DecisionTree:
 
     def _build_depthwise(self, root, X_binned, gradients, hessians):
         """Standard depth-wise growth."""
-        queue = [root]
+        root_split, root_hist = self._find_split_with_hist(
+            root, X_binned, gradients, hessians)
+        if root_split is None:
+            return
+
+        # Queue carries (node, precomputed_hist, precomputed_split)
+        queue = [(root, root_hist, root_split)]
 
         while queue:
             next_queue = []
-            for node in queue:
+            for node, node_hist, split in queue:
                 if node.depth >= self.max_depth:
                     continue
-                split = self._find_split(node, X_binned, gradients, hessians)
-                if split is not None:
-                    feat, bin_thresh, gain, nan_dir = split
-                    self._apply_split(node, feat, bin_thresh, gain, nan_dir,
-                                      X_binned, gradients, hessians)
-                    next_queue.extend([node.left, node.right])
+                feat, bin_thresh, gain, nan_dir = split
+                self._apply_split(node, feat, bin_thresh, gain, nan_dir,
+                                  X_binned, gradients, hessians)
+
+                # Subtraction trick: one build + one subtract instead of two builds
+                left_hist, right_hist = self._compute_children_hists(
+                    node, node_hist, X_binned, gradients, hessians)
+
+                for child, child_hist in ((node.left, left_hist), (node.right, right_hist)):
+                    if child.depth < self.max_depth:
+                        child_split, child_hist = self._find_split_with_hist(
+                            child, X_binned, gradients, hessians, hist=child_hist)
+                        if child_split is not None:
+                            next_queue.append((child, child_hist, child_split))
             queue = next_queue
 
     def _build_hybrid(self, root, X_binned, gradients, hessians):
@@ -348,12 +368,15 @@ class DecisionTree:
             leaf_heap = []
             for node in level_nodes:
                 if node.depth < self.max_depth:
-                    split = self._find_split(node, X_binned, gradients, hessians)
+                    split, node_hist = self._find_split_with_hist(
+                        node, X_binned, gradients, hessians)
                     if split is not None:
-                        heapq.heappush(leaf_heap, (-split[2], id(node), node, split))
+                        heapq.heappush(leaf_heap, (-split[2], id(node),
+                                                   node, split, node_hist))
 
             while leaf_heap and n_leaves < self.max_leaves:
-                neg_gain, _, node, (feat, bin_thresh, gain, nan_dir) = heapq.heappop(leaf_heap)
+                neg_gain, _, node, (feat, bin_thresh, gain, nan_dir), node_hist = \
+                    heapq.heappop(leaf_heap)
 
                 if node.depth >= self.max_depth:
                     continue
@@ -362,22 +385,47 @@ class DecisionTree:
                                   X_binned, gradients, hessians)
                 n_leaves += 1
 
-                for child in (node.left, node.right):
+                # Subtraction trick: one build + one subtract instead of two builds
+                left_hist, right_hist = self._compute_children_hists(
+                    node, node_hist, X_binned, gradients, hessians)
+
+                for child, child_hist in ((node.left, left_hist), (node.right, right_hist)):
                     if child.depth < self.max_depth:
-                        child_split = self._find_split(child, X_binned, gradients, hessians)
+                        child_split, child_hist = self._find_split_with_hist(
+                            child, X_binned, gradients, hessians, hist=child_hist)
                         if child_split is not None:
                             heapq.heappush(leaf_heap, (-child_split[2], id(child),
-                                                        child, child_split))
+                                                       child, child_split, child_hist))
 
     # --- Helpers ---
 
     def _find_split(self, node, X_binned, gradients, hessians):
         """Find best split for a node. Returns (feature, bin, gain, nan_dir) or None."""
-        if len(node.sample_indices) < 2 * self.min_child_samples:
-            return None
+        split, _ = self._find_split_with_hist(node, X_binned, gradients, hessians)
+        return split
 
-        grad_hist, hess_hist, count_hist = self.hist_builder.build_histogram(
-            X_binned, gradients, hessians, node.sample_indices)
+    def _find_split_with_hist(self, node, X_binned, gradients, hessians, hist=None):
+        """Like _find_split but also returns the histogram that was used/built.
+
+        Parameters
+        ----------
+        hist : tuple (grad_hist, hess_hist, count_hist) or None
+            Pre-built histogram to reuse. Built from node.sample_indices if None.
+
+        Returns
+        -------
+        split : (feature, bin, gain, nan_dir) or None
+        hist  : tuple or None  — always returned so callers can pass it to
+                _compute_children_hists even when no valid split is found.
+        """
+        if len(node.sample_indices) < 2 * self.min_child_samples:
+            return None, hist
+
+        if hist is None:
+            hist = self.hist_builder.build_histogram(
+                X_binned, gradients, hessians, node.sample_indices)
+
+        grad_hist, hess_hist, count_hist = hist
 
         feat, bin_thresh, gain, nan_dir = self.hist_builder.find_best_split(
             grad_hist, hess_hist, count_hist,
@@ -389,9 +437,31 @@ class DecisionTree:
             monotone_checker=self.monotone_checker)
 
         if feat < 0 or gain <= 0:
-            return None
+            return None, hist
 
-        return feat, bin_thresh, gain, nan_dir
+        return (feat, bin_thresh, gain, nan_dir), hist
+
+    def _compute_children_hists(self, node, parent_hist, X_binned, gradients, hessians):
+        """Compute both children's histograms using the subtraction trick.
+
+        Builds the histogram for the smaller child from scratch, then derives
+        the larger child's histogram as parent_hist - smaller_child_hist.
+        This saves one full histogram build per split.
+
+        Returns
+        -------
+        left_hist, right_hist : tuples of (grad_hist, hess_hist, count_hist)
+        """
+        left, right = node.left, node.right
+        if len(left.sample_indices) <= len(right.sample_indices):
+            left_hist = self.hist_builder.build_histogram(
+                X_binned, gradients, hessians, left.sample_indices)
+            right_hist = self.hist_builder.subtract_histograms(parent_hist, left_hist)
+        else:
+            right_hist = self.hist_builder.build_histogram(
+                X_binned, gradients, hessians, right.sample_indices)
+            left_hist = self.hist_builder.subtract_histograms(parent_hist, right_hist)
+        return left_hist, right_hist
 
     def _apply_split(self, node, feat, bin_thresh, gain, nan_dir,
                      X_binned, gradients, hessians):

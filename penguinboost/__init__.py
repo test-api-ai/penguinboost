@@ -32,6 +32,12 @@ from penguinboost.objectives.corr import (
     FeatureExposurePenalizedObjective,
 )
 
+try:
+    from penguinboost._core import set_num_threads, get_num_threads
+except ImportError:
+    def set_num_threads(n): pass      # noqa: E704
+    def get_num_threads(): return 1   # noqa: E704
+
 __version__ = "0.3.0"
 __all__ = [
     # sklearn estimators
@@ -50,4 +56,7 @@ __all__ = [
     "SpearmanObjective",
     "MaxSharpeEraObjective",
     "FeatureExposurePenalizedObjective",
+    # thread control
+    "set_num_threads",
+    "get_num_threads",
 ]

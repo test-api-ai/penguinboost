@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(pip show:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(clang:*)",
+      "Bash(/tmp/test_omp:*)",
+      "Bash(pip install:*)",
+      "Bash(otool:*)",
+      "Bash(nm:*)"
     ]
   }
 }
