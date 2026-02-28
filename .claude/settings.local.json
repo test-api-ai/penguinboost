@@ -9,7 +9,10 @@
       "Bash(pip install:*)",
       "Bash(otool:*)",
       "Bash(nm:*)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }

@@ -3,7 +3,7 @@
 **AROGB (Adversarial Regularized Ordered Gradient Boosting)**
 
 LightGBM・CatBoost・XGBoost の技術を融合した独自の勾配ブースティングライブラリ。
-金融データでの過学習耐性を最優先に設計。Numerai 流の金融特化機能も搭載。
+金融データでの過学習耐性を最優先に設計。
 
 ---
 
