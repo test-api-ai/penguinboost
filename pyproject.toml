@@ -5,7 +5,30 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "penguinboost"
 version = "0.3.1"
-description = "Hybrid gradient boosting library."
+description = "Hybrid gradient boosting fusing LightGBM, CatBoost, and XGBoost techniques with financial-specific overfitting resistance."
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "S.I", email = "test_api_ai@proton.me"},
+]
+keywords = [
+    "gradient boosting", "gbdt", "machine learning", "xgboost",
+    "lightgbm", "catboost", "finance", "numerai", "quantitative",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+]
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.21",
@@ -15,5 +38,31 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
 
+[project.urls]
+Homepage = "https://github.com/test-api-ai/penguinboost"
+Repository = "https://github.com/test-api-ai/penguinboost.git"
+"Bug Tracker" = "https://github.com/test-api-ai/penguinboost/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
+
+# ── cibuildwheel 設定 ─────────────────────────────────────────────────────────
+
+[tool.cibuildwheel]
+# CPython 3.9–3.12 のみビルド（PyPy・32bit は除外）
+build = "cp39-* cp310-* cp311-* cp312-*"
+skip  = ["pp*", "*-win32", "*-manylinux_i686"]
+
+# ビルド後に簡易テストを実行
+test-requires = ["pytest"]
+test-command  = "pytest {project}/tests/ -q --no-header -x"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+
+[tool.cibuildwheel.macos]
+# ランナーのネイティブ arch のみビルド（クロスコンパイルで libomp が混在しないよう）
+archs = ["native"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]

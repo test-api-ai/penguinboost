@@ -1,0 +1,100 @@
+# ============================================================
+#  PenguinBoost — wheel ビルド & PyPI 公開
+#
+#  トリガー:
+#    - 手動実行 (workflow_dispatch)
+#    - バージョンタグ push  例: git tag v0.3.1 && git push --tags
+#
+#  PyPI Trusted Publishing (OIDC) を使用するため API キー不要。
+#  初回公開前に以下の設定が必要:
+#    https://pypi.org/manage/account/publishing/
+#      Owner  : test-api-ai
+#      Repo   : penguinboost
+#      Workflow: build_publish.yml
+#      Env    : pypi
+# ============================================================
+
+name: Build and Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  # ── 1. 各 OS でバイナリ wheel をビルド ──────────────────────────────────────
+  build_wheels:
+    name: Wheels · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest   # Linux  x86_64  (manylinux)
+          - macos-13        # macOS  x86_64  (Intel)
+          - macos-14        # macOS  arm64   (Apple Silicon)
+          - windows-latest  # Windows AMD64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # macOS: libomp を Homebrew でインストール（OpenMP 並列化を有効化）
+      - name: Install libomp (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install libomp || true
+
+      # cibuildwheel — pyproject.toml の [tool.cibuildwheel] を参照
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  # ── 2. ソース配布 (sdist) をビルド ──────────────────────────────────────────
+  build_sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install build
+
+      - run: python -m build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-sdist
+          path: dist/*.tar.gz
+
+  # ── 3. PyPI へ公開（タグ push 時のみ） ───────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    # タグ push 時のみ実行（手動実行では wheel のビルドのみ行われる）
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/penguinboost
+
+    permissions:
+      id-token: write   # Trusted Publishing (OIDC) に必要
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

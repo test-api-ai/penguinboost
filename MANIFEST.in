@@ -1,0 +1,17 @@
+include README.md
+include LICENSE
+include NOTICE
+include pyproject.toml
+include setup.py
+
+# C++ ソース・ヘッダー（sdist からビルドできるよう含める）
+recursive-include penguinboost/cpp *.cpp *.h *.hpp
+
+# テスト（任意）
+recursive-include tests *.py
+
+# 生成物は除外
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude *.pyd
