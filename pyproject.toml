@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "penguinboost"
-version = "0.3.2"
+version = "0.3.3"
 description = "Hybrid gradient boosting fusing LightGBM, CatBoost, and XGBoost techniques with financial-specific overfitting resistance."
 readme = "README.md"
 license = {file = "LICENSE"}
