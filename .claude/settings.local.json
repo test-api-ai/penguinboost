@@ -8,7 +8,8 @@
       "Bash(/tmp/test_omp:*)",
       "Bash(pip install:*)",
       "Bash(otool:*)",
-      "Bash(nm:*)"
+      "Bash(nm:*)",
+      "Bash(xargs ls:*)"
     ]
   }
 }

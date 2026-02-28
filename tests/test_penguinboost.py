@@ -1132,3 +1132,632 @@ class TestPenguinBoostRegressorV3:
         assert hasattr(penguinboost, 'SpearmanObjective')
         assert hasattr(penguinboost, 'MaxSharpeEraObjective')
         assert hasattr(penguinboost, 'FeatureExposurePenalizedObjective')
+
+
+# ── 追加テスト群 ───────────────────────────────────────────────────────────────
+# 複雑な動作・相互作用・数値的正確性を検証する
+
+from sklearn.metrics import r2_score as _r2_score
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. ヒストグラム差分トリックの数値正確性
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSubtractionTrickCorrectness:
+    """Verify that histogram subtraction is numerically identical to direct builds."""
+
+    def _make_binned(self, n=400, f=8, max_bins=15, seed=0):
+        rng = np.random.RandomState(seed)
+        X = rng.randn(n, f)
+        X[rng.random((n, f)) < 0.08] = np.nan   # ~8 % NaN values
+        from penguinboost.core.binning import FeatureBinner
+        X_binned = FeatureBinner(max_bins=max_bins).fit_transform(X)
+        g = rng.randn(n)
+        h = np.abs(rng.randn(n)) + 0.1
+        return X_binned, g, h, max_bins
+
+    def test_parent_equals_left_plus_right(self):
+        """hist(parent) == hist(left) + hist(right) for any partition."""
+        X_binned, g, h, mb = self._make_binned()
+        builder = HistogramBuilder(max_bins=mb)
+
+        left_idx  = np.arange(0, 200)
+        right_idx = np.arange(200, 400)
+
+        gp, hp, cp = builder.build_histogram(X_binned, g, h)
+        gl, hl, cl = builder.build_histogram(X_binned, g, h, left_idx)
+        gr, hr, cr = builder.build_histogram(X_binned, g, h, right_idx)
+
+        np.testing.assert_allclose(gp, gl + gr, atol=1e-10,
+                                   err_msg="grad_hist: parent ≠ left + right")
+        np.testing.assert_allclose(hp, hl + hr, atol=1e-10,
+                                   err_msg="hess_hist: parent ≠ left + right")
+        np.testing.assert_array_equal(cp, cl + cr)
+
+    def test_subtract_matches_direct_build(self):
+        """subtract_histograms(parent, left) is numerically equal to direct right build."""
+        X_binned, g, h, mb = self._make_binned(seed=7)
+        builder = HistogramBuilder(max_bins=mb)
+
+        rng = np.random.RandomState(7)
+        left_idx  = np.sort(rng.choice(400, 180, replace=False))
+        right_idx = np.setdiff1d(np.arange(400), left_idx)
+
+        parent_hist     = builder.build_histogram(X_binned, g, h)
+        left_hist       = builder.build_histogram(X_binned, g, h, left_idx)
+        right_direct    = builder.build_histogram(X_binned, g, h, right_idx)
+        right_subtract  = builder.subtract_histograms(parent_hist, left_hist)
+
+        np.testing.assert_allclose(right_subtract[0], right_direct[0], atol=1e-10,
+                                   err_msg="grad_hist mismatch after subtraction")
+        np.testing.assert_allclose(right_subtract[1], right_direct[1], atol=1e-10,
+                                   err_msg="hess_hist mismatch after subtraction")
+        np.testing.assert_allclose(right_subtract[2], right_direct[2], atol=1e-10,
+                                   err_msg="count_hist mismatch after subtraction")
+
+    def test_subtraction_with_all_nan_feature(self):
+        """Column entirely composed of NaN is handled (all samples in NaN bin)."""
+        X_binned, g, h, mb = self._make_binned()
+        # Force feature 0 to all-NaN bin
+        X_binned[:, 0] = mb
+        builder = HistogramBuilder(max_bins=mb)
+
+        left_idx  = np.arange(200)
+        right_idx = np.arange(200, 400)
+
+        parent_hist    = builder.build_histogram(X_binned, g, h)
+        left_hist      = builder.build_histogram(X_binned, g, h, left_idx)
+        right_direct   = builder.build_histogram(X_binned, g, h, right_idx)
+        right_subtract = builder.subtract_histograms(parent_hist, left_hist)
+
+        np.testing.assert_allclose(right_subtract[0], right_direct[0], atol=1e-10)
+
+    def test_end_to_end_model_quality_preserved(self):
+        """The subtraction trick should not degrade model accuracy."""
+        X, y = make_regression(n_samples=500, n_features=10, n_informative=5,
+                               noise=0.5, random_state=42)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        model = PenguinBoostRegressor(n_estimators=100, random_state=42)
+        model.fit(X_tr, y_tr)
+        score = _r2_score(y_te, model.predict(X_te))
+        assert score > 0.90, (
+            f"Subtraction trick degraded accuracy: R²={score:.4f}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. depthwise 成長戦略
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDepthwiseGrowth:
+    """Explicit tests for the depthwise growth strategy (no dedicated class existed)."""
+
+    def test_depthwise_regression_quality(self):
+        """depthwise growth should learn the signal."""
+        X, y = make_regression(n_samples=500, n_features=10, random_state=42)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        model = PenguinBoostRegressor(
+            n_estimators=50, growth="depthwise", max_depth=4, random_state=42)
+        model.fit(X_tr, y_tr)
+        assert _r2_score(y_te, model.predict(X_te)) > 0.5
+
+    def test_depthwise_stump_single_split_per_tree(self):
+        """max_depth=1 with depthwise → each tree has at most 1 split."""
+        X, y = make_regression(n_samples=300, n_features=5, random_state=0)
+        model = PenguinBoostRegressor(
+            n_estimators=10, growth="depthwise", max_depth=1,
+            max_leaves=64, random_state=0)
+        model.fit(X, y)
+        for tree in model.engine_.trees_:
+            assert len(tree.split_features_) <= 1, (
+                f"max_depth=1 tree has {len(tree.split_features_)} splits")
+
+    def test_depthwise_respects_max_depth(self):
+        """depthwise growth must not exceed max_depth in any node."""
+        from penguinboost.core.tree import DecisionTree, TreeNode
+        from penguinboost.core.binning import FeatureBinner
+
+        rng = np.random.RandomState(0)
+        X = rng.randn(200, 5)
+        y = X[:, 0] + rng.randn(200) * 0.1
+        X_binned = FeatureBinner(max_bins=15).fit_transform(X)
+        g = -(y - y.mean())
+        h = np.ones(200)
+
+        for max_d in [1, 2, 4]:
+            tree = DecisionTree(max_depth=max_d, growth="depthwise")
+            tree.build(X_binned, g, h)
+
+            def max_node_depth(node, d=0):
+                if node is None or node.left is None:
+                    return d
+                return max(max_node_depth(node.left, d+1),
+                           max_node_depth(node.right, d+1))
+
+            actual_depth = max_node_depth(tree.root)
+            assert actual_depth <= max_d, (
+                f"max_depth={max_d} violated: tree reached depth {actual_depth}")
+
+    def test_depthwise_same_as_leafwise_for_depth_one(self):
+        """Depthwise and leafwise should pick the same best split for depth=1."""
+        X, y = make_regression(n_samples=300, n_features=5, random_state=1)
+
+        kw = dict(n_estimators=5, max_depth=1, max_leaves=2, random_state=1)
+        m_dw = PenguinBoostRegressor(growth="depthwise", **kw)
+        m_lw = PenguinBoostRegressor(growth="leafwise",  **kw)
+        m_dw.fit(X, y)
+        m_lw.fit(X, y)
+
+        # At depth=1 both strategies make the same greedy split decision
+        np.testing.assert_allclose(
+            m_dw.predict(X), m_lw.predict(X), rtol=1e-10,
+            err_msg="depthwise and leafwise differ at max_depth=1")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. MAE / Huber 目的関数
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestObjectiveMAEHuber:
+    """MAE and Huber objectives are not tested elsewhere."""
+
+    def _data(self, seed=42):
+        X, y = make_regression(n_samples=400, n_features=8, noise=0.5,
+                               random_state=seed)
+        # Normalize y so that MAE/Huber objectives converge within 80 iterations.
+        # (Gradient magnitudes for MAE/Huber are bounded, so large-scale targets
+        # require normalization for the model to make meaningful progress.)
+        y = (y - y.mean()) / (y.std() + 1e-9)
+        return train_test_split(X, y, test_size=0.2, random_state=seed)
+
+    def test_mae_objective_learns(self):
+        X_tr, X_te, y_tr, y_te = self._data()
+        m = PenguinBoostRegressor(
+            objective="mae", n_estimators=80, learning_rate=0.1, random_state=42)
+        m.fit(X_tr, y_tr)
+        assert _r2_score(y_te, m.predict(X_te)) > 0.5
+
+    def test_huber_objective_learns(self):
+        X_tr, X_te, y_tr, y_te = self._data()
+        m = PenguinBoostRegressor(
+            objective="huber", huber_delta=1.0, n_estimators=80,
+            learning_rate=0.1, random_state=42)
+        m.fit(X_tr, y_tr)
+        assert _r2_score(y_te, m.predict(X_te)) > 0.5
+
+    def test_mae_init_score_is_median(self):
+        """MAEObjective.init_score should return the median, not the mean."""
+        from penguinboost.objectives.regression import MAEObjective
+        y = np.array([1.0, 2.0, 3.0, 4.0, 100.0])
+        obj = MAEObjective()
+        assert obj.init_score(y) == pytest.approx(np.median(y))
+        assert obj.init_score(y) != pytest.approx(np.mean(y))
+
+    def test_huber_gradient_clips_at_delta(self):
+        """Huber gradient should be clipped to [-delta, delta] for large residuals."""
+        from penguinboost.objectives.regression import HuberObjective
+        delta = 2.0
+        obj = HuberObjective(delta=delta)
+        pred = np.array([0.0])
+        y    = np.array([100.0])   # huge residual
+
+        grad = obj.gradient(y, pred)
+        assert abs(grad[0]) == pytest.approx(delta)
+
+    def test_huber_equals_mse_for_small_residuals(self):
+        """For |residual| < delta, Huber gradient equals MSE gradient."""
+        from penguinboost.objectives.regression import HuberObjective, MSEObjective
+        delta = 5.0
+        obj_h = HuberObjective(delta=delta)
+        obj_m = MSEObjective()
+        y    = np.array([0.0, 0.5, -0.5])
+        pred = np.array([1.0, 2.0, -1.5])   # residuals < delta
+
+        np.testing.assert_allclose(
+            obj_h.gradient(y, pred), obj_m.gradient(y, pred), atol=1e-12)
+
+    def test_objectives_produce_different_predictions(self):
+        """MSE, MAE, Huber should not all produce identical predictions."""
+        rng = np.random.RandomState(0)
+        X = rng.randn(300, 5)
+        # Target with heavy-tailed noise to create differences between objectives
+        y = X[:, 0] + rng.standard_cauchy(300) * 0.5
+
+        kw = dict(n_estimators=50, random_state=0)
+        m_mse   = PenguinBoostRegressor(objective="mse",   **kw).fit(X, y)
+        m_mae   = PenguinBoostRegressor(objective="mae",   **kw).fit(X, y)
+        m_huber = PenguinBoostRegressor(objective="huber", **kw).fit(X, y)
+
+        p_mse   = m_mse.predict(X)
+        p_mae   = m_mae.predict(X)
+        p_huber = m_huber.predict(X)
+
+        assert not np.allclose(p_mse, p_mae,   atol=1e-3), "MSE == MAE predictions"
+        assert not np.allclose(p_mse, p_huber, atol=1e-3), "MSE == Huber predictions"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. sklearn 互換性
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSklearnCompatibility:
+    """clone(), Pipeline, cross_val_score, GridSearchCV."""
+
+    def test_clone_regressor(self):
+        from sklearn.base import clone
+        m = PenguinBoostRegressor(n_estimators=20, learning_rate=0.05, random_state=7)
+        c = clone(m)
+        assert c.n_estimators  == 20
+        assert c.learning_rate == pytest.approx(0.05)
+        assert c.random_state  == 7
+        assert not hasattr(c, "engine_")   # clone must be unfitted
+
+    def test_clone_classifier(self):
+        from sklearn.base import clone
+        m = PenguinBoostClassifier(max_depth=3, reg_lambda=2.0)
+        c = clone(m)
+        assert c.max_depth  == 3
+        assert c.reg_lambda == pytest.approx(2.0)
+        assert not hasattr(c, "engine_")
+
+    def test_pipeline_regression(self):
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+        X, y = make_regression(n_samples=200, n_features=8, random_state=0)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=0)
+
+        pipe = Pipeline([
+            ("sc",    StandardScaler()),
+            ("model", PenguinBoostRegressor(n_estimators=30, random_state=0)),
+        ])
+        pipe.fit(X_tr, y_tr)
+        preds = pipe.predict(X_te)
+
+        assert preds.shape == (len(y_te),)
+        assert np.isfinite(preds).all()
+        assert _r2_score(y_te, preds) > 0.3
+
+    def test_pipeline_classification(self):
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+        X, y = make_classification(n_samples=200, n_features=8, random_state=0)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=0)
+
+        pipe = Pipeline([
+            ("sc",    StandardScaler()),
+            ("model", PenguinBoostClassifier(n_estimators=20, random_state=0)),
+        ])
+        pipe.fit(X_tr, y_tr)
+        preds = pipe.predict(X_te)
+
+        assert preds.shape == (len(y_te),)
+        assert set(preds).issubset(set(y))
+
+    def test_cross_val_score_regressor(self):
+        from sklearn.model_selection import cross_val_score
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        scores = cross_val_score(
+            PenguinBoostRegressor(n_estimators=20, random_state=0),
+            X, y, cv=3, scoring="r2")
+        assert scores.shape == (3,)
+        assert np.all(scores > -1.0), f"Unexpectedly poor CV scores: {scores}"
+
+    def test_gridsearchcv_finds_best_param(self):
+        from sklearn.model_selection import GridSearchCV
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        gs = GridSearchCV(
+            PenguinBoostRegressor(n_estimators=20, random_state=0),
+            param_grid={"learning_rate": [0.01, 0.1]},
+            cv=2, scoring="r2")
+        gs.fit(X, y)
+        assert gs.best_params_["learning_rate"] in [0.01, 0.1]
+        assert gs.best_score_ > -1.0
+
+    def test_set_params_then_fit(self):
+        """set_params should be respected on subsequent fit calls."""
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        m = PenguinBoostRegressor(n_estimators=5, random_state=0)
+        m.set_params(n_estimators=15)
+        m.fit(X, y)
+        assert m.engine_.best_iteration_ == 14   # 0-indexed → 14 means 15 trees
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. 再現性
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReproducibility:
+    """Same random_state → identical output; different seeds → different output."""
+
+    def test_same_seed_identical_predictions(self):
+        X, y = make_regression(n_samples=200, n_features=10, random_state=0)
+        kw = dict(n_estimators=30, random_state=42)
+        p1 = PenguinBoostRegressor(**kw).fit(X, y).predict(X)
+        p2 = PenguinBoostRegressor(**kw).fit(X, y).predict(X)
+        np.testing.assert_array_equal(p1, p2)
+
+    def test_different_seeds_differ_with_colsample(self):
+        """Column subsampling introduces randomness; different seeds must give different models."""
+        X, y = make_regression(n_samples=300, n_features=20, random_state=0)
+        kw = dict(n_estimators=30, colsample_bytree=0.5)
+        p1 = PenguinBoostRegressor(**kw, random_state=1).fit(X, y).predict(X)
+        p2 = PenguinBoostRegressor(**kw, random_state=99).fit(X, y).predict(X)
+        assert not np.allclose(p1, p2), "Different seeds produced identical models"
+
+    def test_predict_is_idempotent(self):
+        """predict() called twice on the same input returns identical arrays."""
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        m = PenguinBoostRegressor(n_estimators=20, random_state=0).fit(X, y)
+        np.testing.assert_array_equal(m.predict(X), m.predict(X))
+
+    def test_classifier_same_seed_identical_proba(self):
+        X, y = make_classification(n_samples=200, n_features=8, random_state=0)
+        kw = dict(n_estimators=20, random_state=42)
+        p1 = PenguinBoostClassifier(**kw).fit(X, y).predict_proba(X)
+        p2 = PenguinBoostClassifier(**kw).fit(X, y).predict_proba(X)
+        np.testing.assert_array_equal(p1, p2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. 特徴量重要度の性質
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFeatureImportanceProperties:
+    """Feature importances must satisfy mathematical invariants."""
+
+    def _fit(self, n_features=10, importance_type="gain", seed=42, **kw):
+        X, y = make_regression(n_samples=500, n_features=n_features,
+                               n_informative=5, random_state=seed)
+        m = PenguinBoostRegressor(
+            n_estimators=80, importance_type=importance_type,
+            random_state=seed, **kw)
+        m.fit(X, y)
+        return m, X, y
+
+    def test_gain_importances_sum_to_one(self):
+        m, _, _ = self._fit(importance_type="gain")
+        assert np.allclose(m.feature_importances_.sum(), 1.0, atol=1e-9)
+
+    def test_split_importances_sum_to_one(self):
+        m, _, _ = self._fit(importance_type="split")
+        assert np.allclose(m.feature_importances_.sum(), 1.0, atol=1e-9)
+
+    def test_importances_non_negative(self):
+        m, _, _ = self._fit()
+        assert np.all(m.feature_importances_ >= 0)
+
+    def test_informative_features_rank_high(self):
+        """The 5 informative features should dominate the top-6 ranks."""
+        rng = np.random.RandomState(0)
+        X = rng.randn(600, 10)
+        # Strong signal only in features 0..4
+        y = X[:, :5].sum(axis=1) + rng.randn(600) * 0.1
+        m = PenguinBoostRegressor(n_estimators=100, random_state=0).fit(X, y)
+        top5 = set(np.argsort(m.feature_importances_)[-5:])
+        # At least 4 of the top-5 should be the informative features
+        overlap = len(top5 & set(range(5)))
+        assert overlap >= 4, (
+            f"Only {overlap}/5 informative features in top-5: {top5}")
+
+    def test_colsample_reduces_nonzero_features(self):
+        """With aggressive colsample_bytree and few trees, fewer features should be non-zero.
+
+        With colsample_bytree=0.2 and only 5 trees (6 features/tree from 30),
+        P(feature never selected) ≈ 0.8^5 ≈ 33%, so ~10 of 30 features stay at 0.
+        With colsample_bytree=1.0, all features are eligible every tree.
+        """
+        X, y = make_regression(n_samples=500, n_features=30, n_informative=30,
+                               random_state=42)
+        m_full = PenguinBoostRegressor(
+            n_estimators=5, colsample_bytree=1.0, random_state=42).fit(X, y)
+        m_low = PenguinBoostRegressor(
+            n_estimators=5, colsample_bytree=0.2, random_state=42).fit(X, y)
+        n_full = np.sum(m_full.feature_importances_ > 0)
+        n_low  = np.sum(m_low.feature_importances_ > 0)
+        assert n_low < n_full, (
+            f"colsample_bytree=0.2 didn't reduce active features: "
+            f"{n_low} vs {n_full}")
+
+    def test_multiclass_importances_sum_to_one(self):
+        X, y = make_classification(n_samples=400, n_features=8,
+                                   n_classes=3, n_informative=6,
+                                   n_clusters_per_class=1, random_state=0)
+        m = PenguinBoostClassifier(n_estimators=20, random_state=0).fit(X, y)
+        assert np.allclose(m.feature_importances_.sum(), 1.0, atol=1e-9)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. エッジケース
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEdgeCases:
+
+    def test_stump_max_depth_one(self):
+        """max_depth=1 → each tree has at most one split."""
+        X, y = make_regression(n_samples=300, n_features=5, random_state=0)
+        m = PenguinBoostRegressor(
+            n_estimators=10, max_depth=1, max_leaves=2, random_state=0)
+        m.fit(X, y)
+        for tree in m.engine_.trees_:
+            assert len(tree.split_features_) <= 1
+
+    def test_min_child_samples_prevents_all_splits(self):
+        """min_child_samples > n/2 must prevent any split from occurring."""
+        n = 100
+        X, y = make_regression(n_samples=n, n_features=5, random_state=0)
+        # Every potential split would leave < 51 samples on one side → impossible
+        m = PenguinBoostRegressor(
+            n_estimators=5, min_child_samples=51, random_state=0)
+        m.fit(X, y)
+        for tree in m.engine_.trees_:
+            assert len(tree.split_features_) == 0, (
+                "Split occurred despite min_child_samples constraint")
+
+    def test_single_feature(self):
+        """A model with a single input feature should work end-to-end."""
+        rng = np.random.RandomState(0)
+        X = rng.randn(300, 1)
+        y = X[:, 0] ** 2 + rng.randn(300) * 0.1
+        m = PenguinBoostRegressor(n_estimators=50, random_state=0).fit(X, y)
+        assert np.isfinite(m.predict(X)).all()
+        assert _r2_score(y, m.predict(X)) > 0.5
+
+    def test_constant_target_predicts_constant(self):
+        """With a constant target, all predictions should equal that constant."""
+        rng = np.random.RandomState(0)
+        X = rng.randn(100, 4)
+        c = 7.5
+        y = np.full(100, c)
+        m = PenguinBoostRegressor(n_estimators=5, random_state=0).fit(X, y)
+        np.testing.assert_allclose(m.predict(X), c, atol=1e-6)
+
+    def test_single_sample_vs_batch_prediction(self):
+        """Predicting one sample at a time must match batch prediction."""
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        m = PenguinBoostRegressor(n_estimators=20, random_state=0).fit(X, y)
+        batch = m.predict(X[:5])
+        singles = np.array([m.predict(X[i:i+1])[0] for i in range(5)])
+        np.testing.assert_allclose(batch, singles, rtol=1e-10)
+
+    def test_large_reg_lambda_shrinks_predictions(self):
+        """Heavy L2 regularization should shrink leaf values toward zero."""
+        X, y = make_regression(n_samples=300, n_features=5, noise=5.0, random_state=0)
+        kw = dict(n_estimators=50, learning_rate=0.3, random_state=0)
+        m_low  = PenguinBoostRegressor(reg_lambda=0.01, **kw).fit(X, y)
+        m_high = PenguinBoostRegressor(reg_lambda=1000.0, **kw).fit(X, y)
+        # High regularization → predictions closer to base score → smaller variance
+        assert m_high.predict(X).std() < m_low.predict(X).std()
+
+    def test_high_reg_alpha_produces_zero_leaf_values(self):
+        """Very high L1 penalty (reg_alpha) should force many leaf values to zero."""
+        rng = np.random.RandomState(0)
+        X = rng.randn(200, 5)
+        y = X[:, 0] * 0.01 + rng.randn(200) * 0.001  # very small signal
+        m = PenguinBoostRegressor(
+            n_estimators=5, reg_alpha=1e6, random_state=0).fit(X, y)
+        # With huge L1, gradient must exceed reg_alpha to get non-zero leaf → all zero
+        preds = m.predict(X)
+        assert np.allclose(preds, preds[0], atol=1e-6)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. 早期終了の正確性
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEarlyStoppingBehavior:
+
+    def test_stops_before_n_estimators(self):
+        """early_stopping_rounds should stop training before n_estimators."""
+        X, y = make_regression(n_samples=500, n_features=10, random_state=0)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=0)
+        m = PenguinBoostRegressor(
+            n_estimators=200, early_stopping_rounds=10, random_state=0)
+        m.fit(X_tr, y_tr, eval_set=(X_te, y_te))
+        assert m.engine_.best_iteration_ < 199
+
+    def test_no_early_stopping_uses_all_iterations(self):
+        """Without early stopping, best_iteration_ == n_estimators - 1."""
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        n_est = 25
+        m = PenguinBoostRegressor(n_estimators=n_est, random_state=0).fit(X, y)
+        assert m.engine_.best_iteration_ == n_est - 1
+
+    def test_eval_set_no_effect_on_predictions_without_early_stop(self):
+        """When early stopping is off, eval_set must not alter training predictions."""
+        X, y = make_regression(n_samples=300, n_features=5, random_state=0)
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=0)
+
+        m_no  = PenguinBoostRegressor(n_estimators=20, random_state=0)
+        m_ev  = PenguinBoostRegressor(n_estimators=20, random_state=0)
+        m_no.fit(X_tr, y_tr)
+        m_ev.fit(X_tr, y_tr, eval_set=(X_te, y_te))
+
+        np.testing.assert_allclose(
+            m_no.predict(X_tr), m_ev.predict(X_tr), rtol=1e-10,
+            err_msg="eval_set changed training predictions without early stopping")
+
+    def test_train_losses_recorded(self):
+        """train_losses_ should be recorded for every completed iteration."""
+        X, y = make_regression(n_samples=200, n_features=5, random_state=0)
+        n_est = 15
+        m = PenguinBoostRegressor(n_estimators=n_est, random_state=0).fit(X, y)
+        assert len(m.engine_.train_losses_) == n_est
+        assert all(np.isfinite(l) for l in m.engine_.train_losses_)
+
+    def test_train_losses_generally_decrease(self):
+        """Training loss should trend downward (not necessarily monotone each step)."""
+        X, y = make_regression(n_samples=500, n_features=10, random_state=0)
+        m = PenguinBoostRegressor(n_estimators=50, learning_rate=0.1,
+                                   random_state=0).fit(X, y)
+        losses = np.array(m.engine_.train_losses_)
+        # First quarter vs last quarter
+        assert losses[:10].mean() > losses[-10:].mean()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. スレッド制御 API (OpenMP)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestThreadControl:
+    """set_num_threads / get_num_threads correctness and training invariance."""
+
+    def test_get_num_threads_positive_int(self):
+        import penguinboost
+        n = penguinboost.get_num_threads()
+        assert isinstance(n, int) and n >= 1
+
+    def test_set_then_get(self):
+        import penguinboost
+        original = penguinboost.get_num_threads()
+        try:
+            penguinboost.set_num_threads(2)
+            assert penguinboost.get_num_threads() == 2
+        finally:
+            penguinboost.set_num_threads(original)
+
+    def test_set_zero_resets_to_max(self):
+        """set_num_threads(0) should restore the maximum thread count."""
+        import multiprocessing
+        import penguinboost
+        original = penguinboost.get_num_threads()
+        try:
+            penguinboost.set_num_threads(1)
+            assert penguinboost.get_num_threads() == 1
+            penguinboost.set_num_threads(0)   # reset
+            assert penguinboost.get_num_threads() == multiprocessing.cpu_count()
+        finally:
+            penguinboost.set_num_threads(original)
+
+    def test_single_thread_same_predictions(self):
+        """Predictions with 1 thread must match default thread count."""
+        import penguinboost
+        X, y = make_regression(n_samples=300, n_features=10, random_state=0)
+        original = penguinboost.get_num_threads()
+        try:
+            # Train and predict with default threads
+            m_default = PenguinBoostRegressor(n_estimators=20, random_state=0)
+            m_default.fit(X, y)
+            p_default = m_default.predict(X)
+
+            # Train and predict with forced 1 thread
+            penguinboost.set_num_threads(1)
+            m_1t = PenguinBoostRegressor(n_estimators=20, random_state=0)
+            m_1t.fit(X, y)
+            p_1t = m_1t.predict(X)
+        finally:
+            penguinboost.set_num_threads(original)
+
+        # Float-point ordering may differ at epsilon level; use generous tolerance
+        np.testing.assert_allclose(
+            p_default, p_1t, atol=1e-6,
+            err_msg="1-thread result differs from multi-thread result")
+
+    def test_set_get_num_threads_exported(self):
+        """set_num_threads and get_num_threads must be importable from top-level."""
+        import penguinboost
+        assert hasattr(penguinboost, 'set_num_threads')
+        assert hasattr(penguinboost, 'get_num_threads')
+        assert callable(penguinboost.set_num_threads)
+        assert callable(penguinboost.get_num_threads)
