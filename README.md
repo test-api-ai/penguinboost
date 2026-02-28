@@ -1,3 +1,5 @@
+[![Build and Publish](https://github.com/test-api-ai/penguinboost/actions/workflows/build_publish.yml/badge.svg)](https://github.com/test-api-ai/penguinboost/actions/workflows/build_publish.yml)
+
 # PenguinBoost
 
 
