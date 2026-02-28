@@ -76,6 +76,10 @@ def _try_compile_openmp(compile_args, link_args, inc_dirs, lib_dirs, libs):
 def _configure_openmp():
     """(compile_args, link_args, inc_dirs, lib_dirs, libs) または None を返す。"""
 
+    # 環境変数で明示的に無効化（CI macOS wheel ビルド等）
+    if os.environ.get("DISABLE_OPENMP"):
+        return None
+
     if _system == "Windows":
         # MSVC は /openmp を組み込みサポート（追加ライブラリ不要）
         return ["/openmp"], [], [], [], []
