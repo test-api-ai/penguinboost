@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # macOS: libomp が存在しなくてもビルドは通る（シングルスレッドにフォールバック）
+      # macOS: libomp があれば OpenMP 有効、なければシングルスレッドにフォールバック
       - name: Install libomp (macOS)
         if: runner.os == 'macOS'
         run: brew install libomp || true

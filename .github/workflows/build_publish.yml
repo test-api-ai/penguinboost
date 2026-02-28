@@ -39,11 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # macOS: libomp を Homebrew でインストール（OpenMP 並列化を有効化）
-      - name: Install libomp (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: brew install libomp || true
-
+      # macOS の libomp インストールは pyproject.toml の before-all で実施
       # cibuildwheel — pyproject.toml の [tool.cibuildwheel] を参照
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3

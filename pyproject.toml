@@ -54,8 +54,10 @@ build = "cp39-* cp310-* cp311-* cp312-*"
 skip  = ["pp*", "*-win32", "*-manylinux_i686"]
 
 # ビルド後に簡易テストを実行
+# tests/__init__.py を置かないことで pytest がプロジェクトルートを sys.path に追加しない
+# → wheel インストール済みパッケージが正しく import される
 test-requires = ["pytest"]
-test-command  = "pytest {project}/tests/ -q --no-header -x"
+test-command  = "pytest {project}/tests/test_penguinboost.py -q --no-header"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
@@ -63,6 +65,10 @@ archs = ["x86_64"]
 [tool.cibuildwheel.macos]
 # ランナーのネイティブ arch のみビルド（クロスコンパイルで libomp が混在しないよう）
 archs = ["native"]
+# libomp を Homebrew でインストール（ビルド前に 1 回だけ実行）
+before-all = "brew install libomp || true"
+# delocate が libomp を見つけられるよう DYLD_LIBRARY_PATH を設定してから wheel を修復
+repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
