@@ -44,7 +44,7 @@ class PurgedKFold:
             test_start = i * fold_size
             test_end = min((i + 1) * fold_size, n_samples)
 
-            # Embargo zone: remove samples right after the test set
+            # エンバーゴゾーン：テストセット直後のサンプルを除外
             embargo_end = min(test_end + embargo_size, n_samples)
 
             train_indices = np.concatenate([
@@ -95,13 +95,13 @@ class TemporalRegularizer:
 
         g_temp = np.zeros(n)
 
-        # Interior points: g[t] = 2*rho*(2*F[t] - F[t-1] - F[t+1])
+        # 内部点: g[t] = 2*rho*(2*F[t] - F[t-1] - F[t+1])
         if n >= 3:
             g_temp[1:-1] = 2.0 * self.rho * (
                 2.0 * predictions[1:-1] - predictions[:-2] - predictions[2:]
             )
 
-        # Boundary points
+        # 境界点
         g_temp[0] = 2.0 * self.rho * (predictions[0] - predictions[1])
         g_temp[-1] = 2.0 * self.rho * (predictions[-1] - predictions[-2])
 
@@ -163,6 +163,7 @@ class RegimeDetector:
         if len(valid) == 0:
             self.thresholds_ = np.zeros(self.n_regimes - 1)
             return self
+        # 分位数閾値を計算
         quantiles = np.linspace(0, 1, self.n_regimes + 1)[1:-1]
         self.thresholds_ = np.quantile(valid, quantiles)
         return self

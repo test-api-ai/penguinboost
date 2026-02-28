@@ -1,9 +1,9 @@
-"""PenguinBoost v3 - AROGB: Adversarial Regularized Ordered Gradient Boosting.
+"""PenguinBoost - AROGB: Adversarial Regularized Ordered Gradient Boosting.
 
 Hybrid gradient boosting fusing LightGBM, CatBoost, and XGBoost techniques
 with financial-specific overfitting resistance.
 
-v3 additions:
+Features:
 - Feature neutralization and orthogonal gradient projection
 - Era-aware boosting and Sharpe-maximizing objectives
 - Spearman / MaxSharpe / FeatureExposurePenalized objectives
@@ -17,7 +17,6 @@ from penguinboost.sklearn_api import (
     PenguinBoostQuantileRegressor,
 )
 
-# v3: financial ML utilities
 from penguinboost.core.neutralization import (
     FeatureNeutralizer,
     OrthogonalGradientProjector,
@@ -40,23 +39,23 @@ except ImportError:
 
 __version__ = "0.3.1"
 __all__ = [
-    # sklearn estimators
+    # sklearn 推定器
     "PenguinBoostClassifier",
     "PenguinBoostRegressor",
     "PenguinBoostRanker",
     "PenguinBoostSurvival",
     "PenguinBoostQuantileRegressor",
-    # v3: feature neutralization
+    # 特徴量中立化
     "FeatureNeutralizer",
     "OrthogonalGradientProjector",
-    # v3: era-aware boosting
+    # エラ対応ブースティング
     "EraBoostingReweighter",
     "EraMetrics",
-    # v3: financial objectives
+    # 金融向け目的関数
     "SpearmanObjective",
     "MaxSharpeEraObjective",
     "FeatureExposurePenalizedObjective",
-    # thread control
+    # スレッド制御
     "set_num_threads",
     "get_num_threads",
 ]

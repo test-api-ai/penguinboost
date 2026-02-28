@@ -1,4 +1,4 @@
-"""Adaptive regularization, gradient perturbation, and stability penalty for PenguinBoost v2."""
+"""適応的正則化、勾配摂動、安定性ペナルティ。"""
 
 import numpy as np
 

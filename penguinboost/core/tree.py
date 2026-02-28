@@ -1,14 +1,11 @@
-"""Decision tree with Leaf-wise (LightGBM), Symmetric (CatBoost), and Hybrid growth strategies.
-
-v2: Hybrid growth (symmetric -> leaf-wise), v2 parameter propagation to histogram.
-"""
+"""Leaf-wise（LightGBM）、Symmetric（CatBoost）、Hybrid 成長戦略を持つ決定木。"""
 
 import numpy as np
 from penguinboost.core.histogram import HistogramBuilder
 
 
 class TreeNode:
-    """A node in the decision tree."""
+    """決定木のノード。"""
 
     __slots__ = [
         "feature", "threshold", "nan_direction",
@@ -17,12 +14,12 @@ class TreeNode:
     ]
 
     def __init__(self):
-        self.feature = -1       # split feature index
-        self.threshold = 0      # split bin threshold
-        self.nan_direction = 0  # 0=left, 1=right
+        self.feature = -1       # 分割特徴量インデックス
+        self.threshold = 0      # 分割ビン閾値
+        self.nan_direction = 0  # 0=左, 1=右
         self.left = None
         self.right = None
-        self.value = 0.0        # leaf prediction
+        self.value = 0.0        # 葉ノードの予測値
         self.depth = 0
         self.gain = 0.0
         self.sample_indices = None
@@ -31,36 +28,36 @@ class TreeNode:
 
 
 class DecisionTree:
-    """Histogram-based decision tree supporting multiple growth strategies.
+    """複数の成長戦略をサポートするヒストグラムベースの決定木。
 
     Parameters
     ----------
     max_depth : int
-        Maximum tree depth.
+        ツリーの最大深さ。
     max_leaves : int
-        Maximum number of leaves (for leaf-wise growth).
+        最大葉数（Leaf-wise 成長で使用）。
     growth : str
-        'leafwise', 'symmetric', 'depthwise', or 'hybrid'.
+        'leafwise', 'symmetric', 'depthwise', 'hybrid'。
     reg_lambda : float
-        L2 regularization on leaf weights.
+        葉の重みに対する L2 正則化。
     reg_alpha : float
-        L1 regularization on leaf weights.
+        葉の重みに対する L1 正則化。
     min_child_weight : float
-        Minimum sum of hessians in a leaf.
+        葉ノードの最小ヘッセ行列和。
     min_child_samples : int
-        Minimum number of samples in a leaf.
+        葉ノードの最小サンプル数。
     max_bins : int
-        Maximum number of histogram bins.
+        ヒストグラムの最大ビン数。
     symmetric_depth : int
-        For hybrid growth: depth at which to switch from symmetric to leaf-wise.
+        ハイブリッド成長で対称から Leaf-wise へ切り替える深さ。
     adaptive_reg : AdaptiveRegularizer or None
-        v2 adaptive regularization.
+        適応的正則化器。
     monotone_checker : MonotoneConstraintChecker or None
-        v2 monotone constraints.
+        単調制約チェッカー。
     iteration : int
-        Current boosting iteration (for adaptive regularization).
+        現在のブースティングイテレーション（適応的正則化用）。
     total_iterations : int
-        Total boosting iterations planned.
+        計画されたブースティングイテレーションの総数。
     """
 
     def __init__(self, max_depth=6, max_leaves=31, growth="leafwise",
@@ -87,7 +84,7 @@ class DecisionTree:
         self.split_gains_ = []
 
     def build(self, X_binned, gradients, hessians):
-        """Build the tree given binned features and gradient/hessian arrays."""
+        """ビニング済み特徴量と勾配・ヘッセ行列からツリーを構築する。"""
         n_samples = X_binned.shape[0]
         all_indices = np.arange(n_samples)
 
@@ -111,25 +108,24 @@ class DecisionTree:
         return self
 
     def predict(self, X_binned):
-        """Predict values for binned feature matrix."""
+        """ビニング済み特徴量行列の予測値を返す。"""
         predictions = np.empty(X_binned.shape[0], dtype=np.float64)
         self._predict_batch(self.root, X_binned, np.arange(X_binned.shape[0]), predictions)
         return predictions
 
     def to_arrays(self, col_indices=None):
-        """Serialize tree to flat pre-order DFS arrays for C++ prediction.
+        """C++ 予測用に DFS 前順の平坦配列へシリアライズする。
 
         Parameters
         ----------
         col_indices : array-like or None
-            If the tree was built on a column-subsampled matrix, supply the
-            original column indices so that feature references are remapped to
-            absolute positions in the full feature matrix.
+            列サブサンプリングで構築された場合、元の列インデックスを指定して
+            特徴量参照を絶対位置へ変換する。
 
         Returns
         -------
         features, thresholds, nan_dirs, values, lefts, rights
-            Each a numpy array of shape (n_nodes,).
+            各要素は (n_nodes,) の numpy 配列。
         """
         features   = []
         thresholds = []
@@ -160,10 +156,10 @@ class DecisionTree:
 
         feat_arr = np.array(features, dtype=np.int32)
 
-        # Remap local feature indices → absolute column indices
+        # ローカル特徴量インデックスを絶対列インデックスへ変換
         if col_indices is not None and len(feat_arr) > 0:
             ci = np.asarray(col_indices, dtype=np.int32)
-            valid = feat_arr >= 0          # interior (non-leaf) nodes only
+            valid = feat_arr >= 0          # 内部（非葉）ノードのみ
             feat_arr[valid] = ci[feat_arr[valid]]
 
         return (
@@ -176,8 +172,8 @@ class DecisionTree:
         )
 
     def _predict_batch(self, node, X_binned, indices, out):
-        """Recursively assign leaf values to a batch of samples at once."""
-        if node.left is None:  # leaf node
+        """サンプルのバッチに葉の値を再帰的に割り当てる。"""
+        if node.left is None:  # 葉ノード
             out[indices] = node.value
             return
         bins = X_binned[indices, node.feature]
@@ -193,10 +189,10 @@ class DecisionTree:
         if len(right_idx) > 0:
             self._predict_batch(node.right, X_binned, right_idx, out)
 
-    # --- Growth strategies ---
+    # --- 成長戦略 ---
 
     def _build_leafwise(self, root, X_binned, gradients, hessians):
-        """Leaf-wise (best-first) growth: always split the leaf with max gain."""
+        """Leaf-wise（ベストファースト）成長：常に最大ゲインの葉を分割する。"""
         import heapq
 
         leaves = []
@@ -217,7 +213,7 @@ class DecisionTree:
                               X_binned, gradients, hessians)
             n_leaves += 1
 
-            # Subtraction trick: one build + one subtract instead of two builds
+            # 差分トリック：2 回のビルドの代わりに 1 回のビルドと 1 回の減算
             left_hist, right_hist = self._compute_children_hists(
                 node, node_hist, X_binned, gradients, hessians)
 
@@ -230,7 +226,7 @@ class DecisionTree:
                                                 child, child_split, child_hist))
 
     def _build_symmetric(self, root, X_binned, gradients, hessians):
-        """Symmetric growth: all nodes at same depth use the same split."""
+        """対称成長：同じ深さの全ノードが同一の分割を使用する。"""
         level_nodes = [root]
 
         for depth in range(self.max_depth):
@@ -277,13 +273,13 @@ class DecisionTree:
             level_nodes = next_level
 
     def _build_depthwise(self, root, X_binned, gradients, hessians):
-        """Standard depth-wise growth."""
+        """標準の深さ優先成長。"""
         root_split, root_hist = self._find_split_with_hist(
             root, X_binned, gradients, hessians)
         if root_split is None:
             return
 
-        # Queue carries (node, precomputed_hist, precomputed_split)
+        # キューに (ノード, ヒストグラム, 分割情報) を格納
         queue = [(root, root_hist, root_split)]
 
         while queue:
@@ -295,7 +291,7 @@ class DecisionTree:
                 self._apply_split(node, feat, bin_thresh, gain, nan_dir,
                                   X_binned, gradients, hessians)
 
-                # Subtraction trick: one build + one subtract instead of two builds
+                # 差分トリック：2 回のビルドの代わりに 1 回のビルドと 1 回の減算
                 left_hist, right_hist = self._compute_children_hists(
                     node, node_hist, X_binned, gradients, hessians)
 
@@ -308,14 +304,14 @@ class DecisionTree:
             queue = next_queue
 
     def _build_hybrid(self, root, X_binned, gradients, hessians):
-        """Hybrid growth: symmetric for levels 0..D_sym, then leaf-wise.
+        """ハイブリッド成長：レベル 0..D_sym は対称成長、その後 Leaf-wise 成長。
 
-        Combines CatBoost's oblivious tree regularization with
-        LightGBM's flexible leaf-wise splitting.
+        CatBoost の oblibious tree 正則化と LightGBM の柔軟な Leaf-wise
+        分割を組み合わせる。
         """
         import heapq
 
-        # Phase 1: Symmetric growth up to symmetric_depth
+        # フェーズ 1: symmetric_depth までの対称成長
         level_nodes = [root]
         n_leaves = 1
 
@@ -359,11 +355,11 @@ class DecisionTree:
                 self._apply_split(node, feat, bin_thresh, gain, nan_dir,
                                   X_binned, gradients, hessians)
                 next_level.extend([node.left, node.right])
-                n_leaves += 1  # net +1 per split
+                n_leaves += 1  # 1 分割あたり純 +1
 
             level_nodes = next_level
 
-        # Phase 2: Leaf-wise growth from symmetric leaves
+        # フェーズ 2: 対称葉からの Leaf-wise 成長
         if level_nodes and n_leaves < self.max_leaves:
             leaf_heap = []
             for node in level_nodes:
@@ -385,7 +381,7 @@ class DecisionTree:
                                   X_binned, gradients, hessians)
                 n_leaves += 1
 
-                # Subtraction trick: one build + one subtract instead of two builds
+                # 差分トリック：2 回のビルドの代わりに 1 回のビルドと 1 回の減算
                 left_hist, right_hist = self._compute_children_hists(
                     node, node_hist, X_binned, gradients, hessians)
 
@@ -397,26 +393,25 @@ class DecisionTree:
                             heapq.heappush(leaf_heap, (-child_split[2], id(child),
                                                        child, child_split, child_hist))
 
-    # --- Helpers ---
+    # --- ヘルパー ---
 
     def _find_split(self, node, X_binned, gradients, hessians):
-        """Find best split for a node. Returns (feature, bin, gain, nan_dir) or None."""
+        """ノードの最適分割を探す。(feature, bin, gain, nan_dir) または None を返す。"""
         split, _ = self._find_split_with_hist(node, X_binned, gradients, hessians)
         return split
 
     def _find_split_with_hist(self, node, X_binned, gradients, hessians, hist=None):
-        """Like _find_split but also returns the histogram that was used/built.
+        """_find_split と同様だが、使用・構築したヒストグラムも返す。
 
         Parameters
         ----------
         hist : tuple (grad_hist, hess_hist, count_hist) or None
-            Pre-built histogram to reuse. Built from node.sample_indices if None.
+            再利用する事前構築済みヒストグラム。None の場合は node.sample_indices から構築する。
 
         Returns
         -------
         split : (feature, bin, gain, nan_dir) or None
-        hist  : tuple or None  — always returned so callers can pass it to
-                _compute_children_hists even when no valid split is found.
+        hist  : tuple or None — 有効な分割が見つからない場合でも常に返される。
         """
         if len(node.sample_indices) < 2 * self.min_child_samples:
             return None, hist
@@ -442,11 +437,11 @@ class DecisionTree:
         return (feat, bin_thresh, gain, nan_dir), hist
 
     def _compute_children_hists(self, node, parent_hist, X_binned, gradients, hessians):
-        """Compute both children's histograms using the subtraction trick.
+        """差分トリックで両子ノードのヒストグラムを計算する。
 
-        Builds the histogram for the smaller child from scratch, then derives
-        the larger child's histogram as parent_hist - smaller_child_hist.
-        This saves one full histogram build per split.
+        小さい方の子のヒストグラムをゼロから構築し、大きい方を
+        parent_hist - 小さい子のヒストグラム として導出する。
+        これにより分割ごとのヒストグラム構築を 1 回節約できる。
 
         Returns
         -------
@@ -465,7 +460,7 @@ class DecisionTree:
 
     def _apply_split(self, node, feat, bin_thresh, gain, nan_dir,
                      X_binned, gradients, hessians):
-        """Apply a split to a node, creating left and right children."""
+        """ノードに分割を適用し、左右の子ノードを作成する。"""
         node.feature = feat
         node.threshold = bin_thresh
         node.gain = gain
@@ -503,17 +498,17 @@ class DecisionTree:
         node.right.value = self._leaf_value(node.right.grad_sum, node.right.hess_sum)
 
     def _leaf_value(self, grad_sum, hess_sum):
-        """Compute optimal leaf value with regularization."""
+        """正則化付きの最適葉値を計算する。"""
         if abs(grad_sum) <= self.reg_alpha:
             return 0.0
         return -(grad_sum - np.sign(grad_sum) * self.reg_alpha) / (hess_sum + self.reg_lambda)
 
     def _predict_one(self, node, x):
-        """Traverse tree for a single sample."""
+        """単一サンプルのツリー探索。"""
         if node.left is None:
             return node.value
         bin_val = x[node.feature]
-        if bin_val == self.max_bins:  # NaN
+        if bin_val == self.max_bins:  # NaN 値
             if node.nan_direction == 0:
                 return self._predict_one(node.left, x)
             else:

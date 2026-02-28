@@ -1,7 +1,6 @@
-"""Histogram-based split finding with subtraction trick (LightGBM-style).
+"""ヒストグラムベースの分割探索（差分トリック / LightGBM スタイル）。
 
-v2: Bayesian adaptive gain, stability penalty, and monotone constraint support.
-C++: build_histogram and find_best_split_basic are accelerated via _core.
+C++ アクセラレーション: build_histogram と find_best_split_basic は _core で高速化される。
 """
 
 import numpy as np
@@ -14,28 +13,28 @@ except ImportError:
 
 
 class HistogramBuilder:
-    """Builds gradient/hessian histograms for binned features and finds best splits."""
+    """ビニング済み特徴量の勾配・ヘッセ行列ヒストグラムを構築し、最良分割を探す。"""
 
     def __init__(self, max_bins=255):
         self.max_bins = max_bins
 
     def build_histogram(self, X_binned, gradients, hessians, sample_indices=None):
-        """Build gradient and hessian histograms for all features.
+        """全特徴量の勾配・ヘッセ行列ヒストグラムを構築する。
 
-        Uses the C++ single-pass implementation when available; falls back to
-        numpy bincount otherwise.
+        利用可能な場合は C++ のシングルパス実装を使用し、
+        それ以外は numpy の bincount にフォールバックする。
 
         Returns:
-            grad_hist: (n_features, max_bins+1) gradient sums per bin
-            hess_hist: (n_features, max_bins+1) hessian sums per bin
-            count_hist: (n_features, max_bins+1) sample counts per bin
+            grad_hist:  (n_features, max_bins+1) ビンごとの勾配和
+            hess_hist:  (n_features, max_bins+1) ビンごとのヘッセ行列和
+            count_hist: (n_features, max_bins+1) ビンごとのサンプル数
         """
         if _HAS_CPP:
             return _cpp.build_histogram(
                 X_binned, gradients, hessians,
                 sample_indices, self.max_bins)
 
-        # ---- Pure-Python fallback ----
+        # Pure-Python フォールバック
         if sample_indices is not None:
             X_sub = X_binned[sample_indices]
             g_sub = gradients[sample_indices]
@@ -46,7 +45,7 @@ class HistogramBuilder:
             h_sub = hessians
 
         n_features = X_sub.shape[1]
-        n_bins = self.max_bins + 1  # +1 for NaN bin
+        n_bins = self.max_bins + 1  # NaN ビン用に +1
 
         grad_hist = np.zeros((n_features, n_bins), dtype=np.float64)
         hess_hist = np.zeros((n_features, n_bins), dtype=np.float64)
@@ -61,7 +60,7 @@ class HistogramBuilder:
         return grad_hist, hess_hist, count_hist
 
     def subtract_histograms(self, parent_hist, sibling_hist):
-        """Subtraction trick: child = parent - sibling (avoids rebuilding)."""
+        """差分トリック: child = parent - sibling（再構築を回避）。"""
         grad_p, hess_p, count_p = parent_hist
         grad_s, hess_s, count_s = sibling_hist
         return (grad_p - grad_s, hess_p - hess_s, count_p - count_s)
@@ -71,20 +70,14 @@ class HistogramBuilder:
                         min_child_samples=1, adaptive_reg=None, iteration=0,
                         total_iterations=1, stability_tracker=None,
                         monotone_checker=None):
-        """Find the best split across all features using histogram bins.
+        """全特徴量・全ビンにわたって最良分割を探す。
 
-        Fully vectorized over features and bins: computes all splits in a single
-        set of numpy operations, avoiding Python-level feature/bin loops.
-
-        v2 additions:
-        - adaptive_reg: AdaptiveRegularizer for per-node lambda
-        - stability_tracker: FeatureStabilityTracker for gain variance penalty
-        - monotone_checker: MonotoneConstraintChecker for constraint enforcement
+        特徴量とビンに対して完全ベクトル化されており、Python レベルのループを避ける。
 
         Returns:
             best_feature, best_bin, best_gain, best_nan_direction
         """
-        # ---- C++ fast path (no adaptive_reg / no monotone constraints) ----
+        # C++ 高速パス（適応的正則化・単調制約なし時）
         if (_HAS_CPP
                 and adaptive_reg is None
                 and monotone_checker is None):
@@ -97,43 +90,43 @@ class HistogramBuilder:
         n_features = grad_hist.shape[0]
         mb = self.max_bins
 
-        # --- Slice valid-bin and NaN-bin parts ---
+        # 有効ビンと NaN ビンに分割
         g_valid = grad_hist[:, :mb]      # (n_features, max_bins)
         h_valid = hess_hist[:, :mb]
-        c_valid = count_hist[:, :mb]     # int64 (no cast needed)
+        c_valid = count_hist[:, :mb]
 
         g_nan = grad_hist[:, mb]         # (n_features,)
         h_nan = hess_hist[:, mb]
-        c_nan = count_hist[:, mb]        # already int64
+        c_nan = count_hist[:, mb]
 
         g_total = g_valid.sum(axis=1)    # (n_features,)
         h_total = h_valid.sum(axis=1)
-        c_total = c_valid.sum(axis=1)    # int64
+        c_total = c_valid.sum(axis=1)
 
         g_sum = g_total + g_nan          # (n_features,)
         h_sum = h_total + h_nan
-        c_sum = c_total + c_nan          # (n_features,)
+        c_sum = c_total + c_nan
 
-        # --- Prefix cumulative sums along bins ---
-        # Shape: (n_features, max_bins), element [j, b] = sum(hist[j, 0..b])
+        # ビン方向の前置累積和
+        # 形状: (n_features, max_bins)、要素 [j, b] = sum(hist[j, 0..b])
         g_cumL = np.cumsum(g_valid, axis=1)
         h_cumL = np.cumsum(h_valid, axis=1)
-        c_cumL = np.cumsum(c_valid, axis=1)   # int64, no cast needed
+        c_cumL = np.cumsum(c_valid, axis=1)
 
-        # Broadcast helpers: add singleton dims for nan_dir and bin axes
+        # ブロードキャスト用シングルトン次元
         g_nan_e = g_nan[:, np.newaxis]          # (n_features, 1)
         h_nan_e = h_nan[:, np.newaxis]
-        c_nan_e = c_nan[:, np.newaxis]          # int64, (n_features, 1)
+        c_nan_e = c_nan[:, np.newaxis]
 
-        # --- Build left-child stats for both nan_dirs simultaneously ---
-        # Stack shape: (2, n_features, max_bins)
-        #   axis-0 index 0 → nan_dir=0 (NaN goes left)
-        #   axis-0 index 1 → nan_dir=1 (NaN goes right)
+        # 両 nan_dir の左子ノード統計を同時構築
+        # スタック形状: (2, n_features, max_bins)
+        #   axis-0 インデックス 0 → nan_dir=0（NaN を左へ）
+        #   axis-0 インデックス 1 → nan_dir=1（NaN を右へ）
         g_L = np.stack([g_cumL + g_nan_e, g_cumL])
         h_L = np.stack([h_cumL + h_nan_e, h_cumL])
         c_L = np.stack([c_cumL + c_nan_e, c_cumL])
 
-        # Right-child stats via complement
+        # 補集合から右子ノード統計を計算
         g_sum_e = g_sum[np.newaxis, :, np.newaxis]   # (1, n_features, 1)
         h_sum_e = h_sum[np.newaxis, :, np.newaxis]
         c_sum_e = c_sum[np.newaxis, :, np.newaxis]
@@ -142,17 +135,16 @@ class HistogramBuilder:
         h_R = h_sum_e - h_L
         c_R = c_sum_e - c_L
 
-        # --- Validity mask ---
+        # 有効スプリットマスク
         valid = ((h_L >= min_child_weight) & (h_R >= min_child_weight) &
                  (c_L >= min_child_samples) & (c_R >= min_child_samples))
-        # (2, n_features, max_bins) bool
 
-        # Early exit if no valid split anywhere
+        # 有効な分割がなければ早期終了
         if not valid.any():
             return -1, -1, 0.0, 0
 
-        # --- Compute split gains (fully vectorized) ---
-        # Parent score per feature: (n_features,) → (1, n_features, 1)
+        # 分割ゲインを計算（完全ベクトル化）
+        # 親スコア (n_features,) → (1, n_features, 1)
         s_total = self._score_vec(g_sum, h_sum, reg_lambda, reg_alpha)
         s_total_e = s_total[np.newaxis, :, np.newaxis]
 
@@ -170,7 +162,7 @@ class HistogramBuilder:
 
         gains = 0.5 * (s_L + s_R - s_total_e)   # (2, n_features, max_bins)
 
-        # --- v2: monotone constraint filter (per-constrained-feature) ---
+        # 単調制約フィルター（制約特徴量ごと）
         if monotone_checker is not None and monotone_checker.has_constraints():
             for j, constraint in monotone_checker.constraints.items():
                 if j >= n_features or constraint == 0:
@@ -184,7 +176,7 @@ class HistogramBuilder:
                 else:
                     valid[:, j, :] &= (right_val <= left_val)
 
-        # --- Mask invalid splits and find global optimum ---
+        # 無効なスプリットをマスクしてグローバル最適を探す
         gains = np.where(valid, gains, 0.0)
         flat_idx = int(np.argmax(gains))
         max_gain = float(gains.ravel()[flat_idx])
@@ -194,19 +186,18 @@ class HistogramBuilder:
 
         best_nan_dir, best_feature, best_bin = np.unravel_index(flat_idx, gains.shape)
 
-        # v2: stability_tracker penalty (no-op as in original)
         if stability_tracker is not None:
             pass
 
         return int(best_feature), int(best_bin), max_gain, int(best_nan_dir)
 
-    # --- Vectorized helpers (shape-agnostic, work on any ndarray shape) ---
+    # --- ベクトル化ヘルパー（形状非依存、任意の ndarray 形状で動作）---
 
     @staticmethod
     def _score_vec(g, h, lam, reg_alpha):
-        """Vectorized node score. Works with any shape numpy arrays."""
+        """ベクトル化ノードスコア。任意形状の numpy 配列で動作する。"""
         if reg_alpha == 0.0:
-            # Fast path: no L1 regularization (common default)
+            # 高速パス：L1 正則化なし（一般的なデフォルト）
             return g * g / (h + lam)
         abs_g = np.abs(g)
         g_adj = g - np.sign(g) * reg_alpha
@@ -214,18 +205,18 @@ class HistogramBuilder:
 
     @staticmethod
     def _leaf_value_vec(g, h, reg_lambda, reg_alpha):
-        """Vectorized leaf value for monotone constraint checking."""
+        """単調制約チェック用のベクトル化葉値。"""
         if reg_alpha == 0.0:
             return -g / (h + reg_lambda)
         abs_g = np.abs(g)
         g_adj = g - np.sign(g) * reg_alpha
         return np.where(abs_g > reg_alpha, -g_adj / (h + reg_lambda), 0.0)
 
-    # --- Original scalar methods (kept for compatibility) ---
+    # --- スカラーメソッド（後方互換性）---
 
     def _compute_gain(self, g_left, h_left, g_right, h_right,
                       g_total, h_total, reg_lambda, reg_alpha):
-        """Compute split gain with L1/L2 regularization (v1 formula)."""
+        """L1/L2 正則化付きの分割ゲインを計算する。"""
         def score(g, h):
             if abs(g) <= reg_alpha:
                 return 0.0
@@ -238,7 +229,7 @@ class HistogramBuilder:
     def _compute_gain_v2(self, g_left, h_left, g_right, h_right,
                          g_total, h_total, lambda_l, lambda_r,
                          reg_lambda, reg_alpha):
-        """Compute split gain with adaptive per-child lambda (v2 formula).
+        """子ノードごとの適応的ラムダを使った分割ゲインを計算する。
 
         Gain = 0.5 * [G_L^2/(H_L+lambda_L) + G_R^2/(H_R+lambda_R) - G^2/(H+lambda)] - gamma
         """
@@ -260,7 +251,7 @@ class HistogramBuilder:
 
     @staticmethod
     def _leaf_value(g, h, reg_lambda, reg_alpha):
-        """Compute leaf value for monotone constraint checking."""
+        """単調制約チェック用の葉値を計算する。"""
         if abs(g) <= reg_alpha:
             return 0.0
         return -(g - np.sign(g) * reg_alpha) / (h + reg_lambda)

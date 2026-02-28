@@ -68,7 +68,7 @@ class FeatureNeutralizer:
 
     def _neutralize_block(self, predictions, X, proportion):
         """Neutralize a single block of predictions against X."""
-        # Tikhonov-regularized least squares: (X^TX + ε·I)^{-1} X^T p
+        # チホノフ正則化最小二乗: (X^TX + ε·I)^{-1} X^T p
         n_feat = X.shape[1]
         XtX = X.T @ X + self.eps * np.eye(n_feat)
         coef = np.linalg.solve(XtX, X.T @ predictions)
@@ -81,7 +81,7 @@ class FeatureNeutralizer:
         for era in np.unique(eras):
             mask = eras == era
             if mask.sum() < X.shape[1] + 1:
-                # Too few samples for stable inversion — skip this era
+                # 安定した逆行列計算に必要なサンプルが不足 — このエラをスキップ
                 continue
             result[mask] = self._neutralize_block(
                 predictions[mask], X[mask], proportion)
@@ -199,7 +199,7 @@ class OrthogonalGradientProjector:
             raise RuntimeError("Call fit() before project().")
         X = self._X_sub
         # g_orth = g - strength * X @ (X^TX + εI)^{-1} @ X^T @ g
-        Xtg = X.T @ gradients                       # (n_features,)
-        coef = self._XtX_inv @ Xtg                  # (n_features,)
-        projection = X @ coef                        # (n_samples,)
+        Xtg = X.T @ gradients                       # (n_features,) 勾配の転置積
+        coef = self._XtX_inv @ Xtg                  # (n_features,) 係数
+        projection = X @ coef                        # (n_samples,) 射影
         return gradients - self.strength * projection

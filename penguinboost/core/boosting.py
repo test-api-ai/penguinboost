@@ -1,8 +1,9 @@
-"""Boosting engine with all v2 features: DART, gradient perturbation, multi-permutation
-ordered boosting, temporal regularization, adaptive regularization, hybrid growth,
-monotone constraints, and regime detection.
+"""勾配ブースティングエンジン。
 
-C++ acceleration: predict() uses _core.predict_trees when available.
+DART、勾配摂動、複数置換順序付きブースティング、時系列正則化、
+適応的正則化、ハイブリッド成長、単調制約を含む。
+
+C++ アクセラレーション: predict() は利用可能な場合 _core.predict_trees を使用する。
 """
 
 import numpy as np
@@ -23,82 +24,82 @@ from penguinboost.core.financial import TemporalRegularizer
 
 
 class BoostingEngine:
-    """Core gradient boosting engine combining LightGBM, CatBoost, and XGBoost techniques.
+    """LightGBM・CatBoost・XGBoost の技術を組み合わせたコア勾配ブースティングエンジン。
 
     Parameters
     ----------
     n_estimators : int
-        Number of boosting rounds.
+        ブースティングラウンド数。
     learning_rate : float
-        Shrinkage rate.
+        シュリンケージ率。
     max_depth : int
-        Maximum tree depth.
+        ツリーの最大深さ。
     max_leaves : int
-        Maximum number of leaves per tree.
+        ツリーあたりの最大葉数。
     growth : str
-        Tree growth strategy: 'leafwise', 'symmetric', 'depthwise', or 'hybrid'.
+        ツリー成長戦略: 'leafwise', 'symmetric', 'depthwise', 'hybrid'。
     reg_lambda : float
-        L2 regularization.
+        L2 正則化。
     reg_alpha : float
-        L1 regularization.
+        L1 正則化。
     min_child_weight : float
-        Minimum hessian sum in leaves.
+        葉ノードの最小ヘッセ行列和。
     min_child_samples : int
-        Minimum samples in leaves.
+        葉ノードの最小サンプル数。
     subsample : float
-        Row subsampling ratio (1.0 = no subsampling).
+        行サブサンプリング率（1.0 = サブサンプリングなし）。
     colsample_bytree : float
-        Column subsampling ratio per tree.
+        ツリーごとの列サブサンプリング率。
     max_bins : int
-        Maximum histogram bins.
+        ヒストグラムの最大ビン数。
     use_goss : bool
-        Use GOSS sampling.
+        GOSS サンプリングを使用するか。
     goss_top_rate : float
-        GOSS top gradient fraction.
+        GOSS の上位勾配割合。
     goss_other_rate : float
-        GOSS other samples fraction.
+        GOSS のその他サンプル割合。
     use_ordered_boosting : bool
-        Use CatBoost-style ordered boosting.
+        CatBoost スタイルの順序付きブースティングを使用するか。
     n_permutations : int
-        Number of permutations for multi-permutation ordered boosting (v2).
+        複数置換順序付きブースティングの置換数。
     cat_features : list or None
-        Indices of categorical features.
+        カテゴリ特徴量のインデックス。
     cat_smoothing : float
-        Smoothing for ordered target statistics.
+        順序付きターゲット統計のスムージング。
     efb_threshold : float
-        EFB conflict threshold (0 = disabled).
+        EFB の競合閾値（0 = 無効）。
     early_stopping_rounds : int or None
-        Stop if no improvement for this many rounds.
+        この回数改善がなければ停止。
     use_dart : bool
-        Enable DART (Dropout Trees) regularization.
+        DART（Dropout Trees）正則化を有効化するか。
     dart_drop_rate : float
-        DART: probability of dropping each tree.
+        DART: 各ツリーをドロップする確率。
     dart_skip_drop : float
-        DART: probability of skipping dropout for an iteration.
+        DART: ドロップアウトをスキップする確率。
     use_gradient_perturbation : bool
-        Enable gradient perturbation (clipping + noise).
+        勾配摂動（クリッピング＋ノイズ）を有効化するか。
     gradient_clip_tau : float
-        Gradient clipping threshold.
+        勾配クリッピング閾値。
     gradient_noise_eta : float
-        Gradient noise scale (relative to std).
+        勾配ノイズスケール（標準偏差に対する相対値）。
     use_adaptive_reg : bool
-        Enable Bayesian adaptive regularization.
+        ベイズ適応的正則化を有効化するか。
     adaptive_alpha : float
-        Schedule scaling for adaptive regularization.
+        適応的正則化のスケジュールスケーリング。
     adaptive_mu : float
-        Bayesian child-node penalty coefficient.
+        ベイズ子ノードペナルティ係数。
     monotone_constraints : dict or None
-        Feature index -> +1/-1 monotone constraint direction.
+        特徴量インデックス -> 単調制約方向（+1/-1）。
     use_temporal_reg : bool
-        Enable temporal regularization (financial).
+        時系列正則化（金融向け）を有効化するか。
     temporal_rho : float
-        Temporal smoothness penalty strength.
+        時系列スムーズネスペナルティの強度。
     symmetric_depth : int
-        For hybrid growth: depth to switch from symmetric to leaf-wise.
+        ハイブリッド成長で対称からLeaf-wiseへ切り替える深さ。
     verbose : int
-        Verbosity level.
+        詳細出力レベル。
     random_state : int or None
-        Random seed.
+        乱数シード。
     """
 
     def __init__(self, n_estimators=100, learning_rate=0.1, max_depth=6,
@@ -109,27 +110,18 @@ class BoostingEngine:
                  use_ordered_boosting=False, n_permutations=4,
                  cat_features=None, cat_smoothing=10.0, efb_threshold=0.0,
                  early_stopping_rounds=None,
-                 # v2 DART
                  use_dart=False, dart_drop_rate=0.1, dart_skip_drop=0.0,
-                 # v2 gradient perturbation
                  use_gradient_perturbation=False,
                  gradient_clip_tau=5.0, gradient_noise_eta=0.1,
-                 # v2 adaptive regularization
                  use_adaptive_reg=False, adaptive_alpha=0.5, adaptive_mu=1.0,
-                 # v2 monotone constraints
                  monotone_constraints=None,
-                 # v2 temporal regularization
                  use_temporal_reg=False, temporal_rho=0.1,
-                 # v2 hybrid growth
                  symmetric_depth=3,
-                 # v3 orthogonal gradient projection
                  use_orthogonal_gradients=False,
                  orthogonal_strength=1.0, orthogonal_eps=1e-4,
                  orthogonal_features=None,
-                 # v3 era boosting
                  use_era_boosting=False,
                  era_boosting_method='hard_era', era_boosting_temp=1.0,
-                 # v3 feature exposure penalty
                  use_feature_exposure_penalty=False,
                  feature_exposure_lambda=0.1, exposure_penalty_features=None,
                  verbose=0, random_state=None):
@@ -167,7 +159,6 @@ class BoostingEngine:
         self.use_temporal_reg = use_temporal_reg
         self.temporal_rho = temporal_rho
         self.symmetric_depth = symmetric_depth
-        # v3
         self.use_orthogonal_gradients = use_orthogonal_gradients
         self.orthogonal_strength = orthogonal_strength
         self.orthogonal_eps = orthogonal_eps
@@ -181,19 +172,19 @@ class BoostingEngine:
         self.verbose = verbose
         self.random_state = random_state
 
-        # Fitted attributes
+        # 学習済み属性
         self.trees_ = []
-        self.tree_lr_ = []  # effective learning rate per tree (for DART)
+        self.tree_lr_ = []          # DART 用ツリーごとの有効学習率
         self.binner_ = None
         self.cat_encoder_ = None
         self.base_score_ = 0.0
         self.best_iteration_ = 0
         self.train_losses_ = []
-        self._cpp_trees = None   # serialized flat-array representation for C++
+        self._cpp_trees = None      # C++ 予測用にシリアライズされた平坦配列
 
     def fit(self, X, y, objective, eval_set=None, eval_metric=None,
             era_indices=None):
-        """Train the boosting model.
+        """ブースティングモデルを学習する。
 
         Parameters
         ----------
@@ -203,25 +194,24 @@ class BoostingEngine:
         eval_set : tuple (X_val, y_val) or None
         eval_metric : callable(y_true, y_pred) -> float, or None
         era_indices : array-like of shape (n_samples,) or None
-            Era (time-period) labels. Enables era-aware features:
-            era boosting reweighting and era-conditional objectives.
+            エラ（時間期間）ラベル。エラブースティングとエラ条件付き目的関数を有効化する。
         """
         rng = np.random.RandomState(self.random_state)
         n_samples, n_features = X.shape
 
-        # Categorical encoding
+        # カテゴリ変数エンコーディング
         self.cat_encoder_ = OrderedTargetEncoder(
             smoothing=self.cat_smoothing, random_state=self.random_state)
         y_for_encode = y[:, 0] if y.ndim == 2 else y
         self.cat_encoder_.fit(X, y_for_encode, cat_features=self.cat_features)
         X_encoded = self.cat_encoder_.transform_train(X, y_for_encode)
 
-        # Binning + EFB
+        # ビニングと EFB
         self.binner_ = FeatureBinner(max_bins=self.max_bins,
                                      efb_threshold=self.efb_threshold)
         X_binned = self.binner_.fit_transform(X_encoded)
 
-        # Bin validation set if provided
+        # 検証セットのビニング
         X_val_binned = None
         y_val = None
         if eval_set is not None:
@@ -229,19 +219,19 @@ class BoostingEngine:
             X_val_encoded = self.cat_encoder_.transform(X_val)
             X_val_binned = self.binner_.transform(X_val_encoded)
 
-        # Initialize predictions
+        # 予測値を初期化
         self.base_score_ = objective.init_score(y)
         predictions = np.full(n_samples, self.base_score_, dtype=np.float64)
 
         if X_val_binned is not None:
             val_predictions = np.full(len(y_val), self.base_score_, dtype=np.float64)
 
-        # GOSS sampler
+        # GOSS サンプラー
         goss = None
         if self.use_goss:
             goss = GOSSSampler(self.goss_top_rate, self.goss_other_rate)
 
-        # v2: Adaptive regularizer
+        # 適応的正則化器
         adaptive_reg = None
         if self.use_adaptive_reg:
             adaptive_reg = AdaptiveRegularizer(
@@ -249,32 +239,32 @@ class BoostingEngine:
                 alpha=self.adaptive_alpha,
                 mu=self.adaptive_mu)
 
-        # v2: Gradient perturber
+        # 勾配摂動器
         perturber = None
         if self.use_gradient_perturbation:
             perturber = GradientPerturber(
                 tau=self.gradient_clip_tau,
                 eta=self.gradient_noise_eta)
 
-        # v2: DART manager
+        # DART マネージャー
         dart_mgr = None
-        dart_tree_data = []  # (tree, col_indices, X_binned_ref)
+        dart_tree_data = []  # (ツリー, 列インデックス, X_binned 参照)
         if self.use_dart:
             dart_mgr = DARTManager(
                 drop_rate=self.dart_drop_rate,
                 skip_drop=self.dart_skip_drop)
 
-        # v2: Monotone constraint checker
+        # 単調制約チェッカー
         monotone_checker = None
         if self.monotone_constraints:
             monotone_checker = MonotoneConstraintChecker(self.monotone_constraints)
 
-        # v2: Temporal regularizer
+        # 時系列正則化器
         temporal_reg = None
         if self.use_temporal_reg:
             temporal_reg = TemporalRegularizer(rho=self.temporal_rho)
 
-        # v3: Orthogonal gradient projector
+        # 直交勾配射影器
         orth_projector = None
         if self.use_orthogonal_gradients:
             from penguinboost.core.neutralization import OrthogonalGradientProjector
@@ -282,12 +272,12 @@ class BoostingEngine:
                 strength=self.orthogonal_strength,
                 eps=self.orthogonal_eps,
                 features=self.orthogonal_features)
-            orth_projector.fit(X_encoded)   # pre-compute (X^TX + εI)^{-1}
+            orth_projector.fit(X_encoded)   # (X^TX + εI)^{-1} を事前計算
 
-        # v3: Era boosting reweighter
+        # エラブースティング再重み付け器
         era_reweighter = None
         era_indices_arr = None
-        y_1d = y[:, 0] if y.ndim == 2 else y   # 1-D target for era metrics
+        y_1d = y[:, 0] if y.ndim == 2 else y   # エラメトリクス用の 1 次元ターゲット
         if self.use_era_boosting and era_indices is not None:
             from penguinboost.core.era_boost import EraBoostingReweighter
             era_reweighter = EraBoostingReweighter(
@@ -295,7 +285,7 @@ class BoostingEngine:
                 temperature=self.era_boosting_temp)
             era_indices_arr = np.asarray(era_indices)
 
-        # v3: Feature exposure penalty (pre-compute centering/std once)
+        # フィーチャーエクスポージャーペナルティ（センタリングと標準偏差を事前計算）
         exposure_penalty_data = None
         if self.use_feature_exposure_penalty:
             feats = self.exposure_penalty_features
@@ -306,11 +296,11 @@ class BoostingEngine:
                 'lambda':     self.feature_exposure_lambda,
             }
 
-        # v3: Wire era_indices into era-conditional objectives (e.g. MaxSharpeEra)
+        # エラ条件付き目的関数に era_indices を設定
         if era_indices is not None and hasattr(objective, 'set_era_indices'):
             objective.set_era_indices(era_indices)
 
-        # Ordered boosting permutations (v2: multi-permutation with median)
+        # 順序付きブースティング用置換リスト
         if self.use_ordered_boosting:
             n_perms = min(self.n_permutations, n_samples)
             permutations = [rng.permutation(n_samples) for _ in range(n_perms)]
@@ -322,7 +312,7 @@ class BoostingEngine:
         self.train_losses_ = []
 
         for iteration in range(self.n_estimators):
-            # v2: DART - drop trees and adjust predictions
+            # DART：ツリーをドロップして予測を調整
             current_predictions = predictions.copy()
             if dart_mgr is not None and len(self.trees_) > 0:
                 dropped = dart_mgr.sample_drops(len(self.trees_), rng)
@@ -332,23 +322,23 @@ class BoostingEngine:
             else:
                 current_predictions = predictions
 
-            # Compute gradients and hessians
+            # 勾配とヘッセ行列を計算
             gradients = objective.gradient(y, current_predictions)
             hessians = objective.hessian(y, current_predictions)
 
-            # v2: Temporal regularization - add temporal gradient
+            # 時系列正則化：時系列勾配を追加
             if temporal_reg is not None:
                 g_temp = temporal_reg.compute_temporal_gradient(current_predictions)
                 gradients = gradients + g_temp
 
-            # v3: Era boosting — scale gradients by era difficulty weights
+            # エラブースティング：エラ難易度重みで勾配をスケーリング
             if era_reweighter is not None:
                 era_w = era_reweighter.compute_sample_weights(
                     current_predictions, y_1d, era_indices_arr)
                 gradients = gradients * era_w
                 hessians = hessians * era_w
 
-            # v3: Feature exposure penalty — add gradient to reduce feature correlation
+            # フィーチャーエクスポージャーペナルティ：特徴相関を低減する勾配を追加
             if exposure_penalty_data is not None:
                 n = len(current_predictions)
                 std_P = current_predictions.std() + 1e-9
@@ -356,20 +346,20 @@ class BoostingEngine:
                 Xc = exposure_penalty_data['X_centered']
                 Xs = exposure_penalty_data['X_std']
                 lam = exposure_penalty_data['lambda']
-                corr = (Xc.T @ P_c) / (n * std_P * Xs)           # (n_feats,)
-                linear = (Xc @ (corr / Xs)) / (n * std_P)         # (n_samples,)
+                corr = (Xc.T @ P_c) / (n * std_P * Xs)           # 形状: (n_feats,)
+                linear = (Xc @ (corr / Xs)) / (n * std_P)         # 形状: (n_samples,)
                 quadratic = P_c * float(corr @ corr) / (n * std_P**2)
                 gradients = gradients + 2.0 * lam * (linear - quadratic)
 
-            # v3: Orthogonal gradient projection
+            # 直交勾配射影
             if orth_projector is not None:
                 gradients = orth_projector.project(gradients)
 
-            # v2: Gradient perturbation
+            # 勾配摂動
             if perturber is not None:
                 gradients = perturber.perturb(gradients, rng)
 
-            # GOSS sampling
+            # GOSS サンプリング
             sample_indices = np.arange(n_samples)
 
             if goss is not None:
@@ -389,7 +379,7 @@ class BoostingEngine:
                     n_sub = max(1, int(n_samples * self.subsample))
                     sample_indices = rng.choice(n_samples, size=n_sub, replace=False)
 
-            # v2: Multi-permutation Ordered Boosting with median aggregation
+            # 複数置換による順序付きブースティング
             if self.use_ordered_boosting:
                 if len(permutations) > 1:
                     all_grads = []
@@ -397,12 +387,12 @@ class BoostingEngine:
                     for perm in permutations:
                         ordered_g = np.empty_like(weighted_gradients)
                         ordered_h = np.empty_like(weighted_hessians)
-                        # Vectorized fancy-index assignment (replaces Python for-loop)
+                        # ベクトル化ファンシーインデックス代入
                         ordered_g[perm] = weighted_gradients[perm]
                         ordered_h[perm] = weighted_hessians[perm]
                         all_grads.append(ordered_g)
                         all_hess.append(ordered_h)
-                    # Median aggregation across permutations (robust to outliers)
+                    # 置換間の中央値集約（外れ値に対して頑健）
                     weighted_gradients = np.median(all_grads, axis=0)
                     weighted_hessians = np.median(all_hess, axis=0)
                 else:
@@ -414,7 +404,7 @@ class BoostingEngine:
                     weighted_gradients = ordered_grads
                     weighted_hessians = ordered_hess
 
-            # Column subsampling
+            # 列サブサンプリング
             if self.colsample_bytree < 1.0:
                 n_cols = X_binned.shape[1]
                 n_sel = max(1, int(n_cols * self.colsample_bytree))
@@ -424,7 +414,7 @@ class BoostingEngine:
                 X_tree = X_binned
                 col_indices = None
 
-            # Build tree (v2: pass adaptive_reg, monotone_checker, growth params)
+            # ツリーを構築
             tree = DecisionTree(
                 max_depth=self.max_depth,
                 max_leaves=self.max_leaves,
@@ -442,16 +432,16 @@ class BoostingEngine:
             )
             tree.build(X_tree, weighted_gradients, weighted_hessians)
 
-            # Store column mapping for prediction
+            # 予測用に列マッピングを保存
             tree._col_indices = col_indices
 
-            # Compute tree predictions
+            # ツリー予測値を計算
             if col_indices is not None:
                 tree_pred = tree.predict(X_binned[:, col_indices])
             else:
                 tree_pred = tree.predict(X_binned)
 
-            # v2: DART scaling
+            # DART スケーリング
             lr = self.learning_rate
             if dart_mgr is not None:
                 scale = dart_mgr.compute_scale_factor()
@@ -461,15 +451,15 @@ class BoostingEngine:
             self.trees_.append(tree)
             self.tree_lr_.append(lr)
 
-            # v2: Store tree data for DART
+            # DART 用にツリーデータを保存
             if dart_mgr is not None:
                 dart_tree_data.append((tree, col_indices, X_binned))
 
-            # Training loss
+            # 訓練損失
             train_loss = objective.loss(y, predictions)
             self.train_losses_.append(train_loss)
 
-            # Validation & early stopping
+            # 検証と早期停止
             if X_val_binned is not None and eval_metric is not None:
                 if col_indices is not None:
                     val_pred = tree.predict(X_val_binned[:, col_indices])
@@ -498,13 +488,13 @@ class BoostingEngine:
                     print(f"[{iteration}] train_loss={train_loss:.6f}")
                 self.best_iteration_ = iteration
 
-        # Serialize trees to flat arrays for C++ prediction
+        # C++ 予測用にツリーを平坦配列にシリアライズ
         self._cpp_trees = self._serialize_trees() if _HAS_CPP else None
 
         return self
 
     def _serialize_trees(self):
-        """Serialize all active trees to flat arrays for C++ predict_trees."""
+        """全ツリーを C++ predict_trees 用の平坦配列にシリアライズする。"""
         n_trees = self.best_iteration_ + 1
         trees_slice = self.trees_[:n_trees]
 
@@ -521,7 +511,7 @@ class BoostingEngine:
             all_thresh.append(t)
             all_nan   .append(nd)
             all_val   .append(v)
-            # Shift left/right child indices from tree-local to global
+            # 子ノードインデックスをツリーローカルからグローバルへ変換
             all_left  .append(np.where(lc >= 0, lc + total, -1))
             all_right .append(np.where(rc >= 0, rc + total, -1))
             lrs.append(self.tree_lr_[i] if i < len(self.tree_lr_) else self.learning_rate)
@@ -543,11 +533,11 @@ class BoostingEngine:
         }
 
     def predict(self, X):
-        """Predict raw scores for new data."""
+        """新しいデータの生スコアを予測する。"""
         X_encoded = self.cat_encoder_.transform(X)
         X_binned  = self.binner_.transform(X_encoded)
 
-        # ---- C++ fast path ----
+        # C++ 高速パス
         if _HAS_CPP and self._cpp_trees is not None:
             ct = self._cpp_trees
             return _cpp.predict_trees(
@@ -558,7 +548,7 @@ class BoostingEngine:
                 ct['n_trees'], self.max_bins,
             )
 
-        # ---- Pure-Python fallback ----
+        # Pure-Python フォールバック
         predictions = np.full(X_binned.shape[0], self.base_score_, dtype=np.float64)
 
         n_trees = self.best_iteration_ + 1
@@ -573,7 +563,7 @@ class BoostingEngine:
         return predictions
 
     def feature_importances(self, importance_type="gain"):
-        """Compute feature importances (split count or total gain)."""
+        """特徴量重要度を計算する（分割回数またはゲイン合計）。"""
         n_features = self.binner_.n_features_bundled
         importances = np.zeros(n_features)
 
@@ -584,7 +574,7 @@ class BoostingEngine:
                         feat = tree._col_indices[feat]
                     if 0 <= feat < n_features:
                         importances[feat] += gain
-            else:  # split count
+            else:  # 分割回数
                 for feat in tree.split_features_:
                     if tree._col_indices is not None:
                         feat = tree._col_indices[feat]

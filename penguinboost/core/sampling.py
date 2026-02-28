@@ -35,20 +35,20 @@ class GOSSSampler:
         n_top = max(1, int(n * self.top_rate))
         n_other = max(1, int(n * self.other_rate))
 
-        # Sort by absolute gradient descending
+        # 絶対勾配の降順でソート
         abs_grad = np.abs(gradients)
         sorted_idx = np.argsort(-abs_grad)
 
         top_indices = sorted_idx[:n_top]
         rest_indices = sorted_idx[n_top:]
 
-        # Random sample from the rest
+        # 残りからランダムサンプリング
         if len(rest_indices) > n_other:
             sampled_rest = rng.choice(rest_indices, size=n_other, replace=False)
         else:
             sampled_rest = rest_indices
 
-        # Weight amplification for the sampled small-gradient samples
+        # 小勾配サンプルの重みを増幅
         if len(rest_indices) > 0 and len(sampled_rest) > 0:
             amplify = len(rest_indices) / len(sampled_rest)
         else:

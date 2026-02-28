@@ -12,7 +12,7 @@ class FeatureBinner:
 
     def __init__(self, max_bins=255, efb_threshold=0.0):
         self.max_bins = max_bins
-        self.efb_threshold = efb_threshold  # conflict ratio threshold for EFB
+        self.efb_threshold = efb_threshold  # EFB の競合率閾値
         self.bin_edges_ = []
         self.bundles_ = None  # list of lists of feature indices
         self.n_features_original_ = 0
@@ -21,7 +21,7 @@ class FeatureBinner:
         """Compute bin edges for each feature and optionally bundle features."""
         self.n_features_original_ = X.shape[1]
 
-        # Compute bin edges per feature
+        # 特徴量ごとのビンエッジを計算
         self.bin_edges_ = []
         for j in range(X.shape[1]):
             col = X[:, j]
@@ -29,13 +29,13 @@ class FeatureBinner:
             if len(valid) == 0:
                 self.bin_edges_.append(np.array([]))
                 continue
-            # Equal-frequency quantile edges
+            # 等頻度分位数エッジ
             n_bins = min(self.max_bins, len(np.unique(valid)))
             quantiles = np.linspace(0, 100, n_bins + 1)[1:-1]
             edges = np.unique(np.percentile(valid, quantiles))
             self.bin_edges_.append(edges)
 
-        # EFB: bundle mutually exclusive features
+        # EFB: 相互排他的特徴量をバンドル
         if self.efb_threshold > 0:
             self.bundles_ = self._find_bundles(X)
         else:
@@ -57,7 +57,7 @@ class FeatureBinner:
                 feat = bundle[0]
                 X_binned[:, bundle_idx] = self._bin_feature(X[:, feat], feat)
             else:
-                # Merge bundled features: offset bins for each sub-feature
+                # バンドル特徴量をマージ：各サブ特徴量のビンをオフセット
                 X_binned[:, bundle_idx] = self._bin_bundle(X, bundle)
 
         return X_binned
@@ -91,11 +91,11 @@ class FeatureBinner:
     def _find_bundles(self, X):
         """Greedy EFB: find groups of mutually exclusive features."""
         n_features = X.shape[1]
-        # Compute non-zero counts for each feature
+        # 各特徴量の非ゼロ数を計算
         nonzero = np.array([(~np.isnan(X[:, j]) & (X[:, j] != 0)).sum()
                             for j in range(n_features)])
 
-        # Sort features by non-zero count (descending)
+        # 非ゼロ数の降順で特徴量をソート
         order = np.argsort(-nonzero)
         bundles = []
         assigned = set()
@@ -113,7 +113,7 @@ class FeatureBinner:
                 conflict = (nz_i & nz_j).sum()
                 conflict_ratio = conflict / max(nz_i.sum(), 1)
                 if conflict_ratio <= self.efb_threshold:
-                    # Check total bins won't exceed 255
+                    # バンドル合計ビン数が 255 を超えないかチェック
                     total_bins = sum(len(self.bin_edges_[f]) + 1 for f in bundle)
                     total_bins += len(self.bin_edges_[j]) + 1
                     if total_bins <= self.max_bins:

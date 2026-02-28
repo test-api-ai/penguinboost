@@ -104,7 +104,7 @@ def concordance_index(times, events, risk_scores):
     return (concordant + 0.5 * tied) / total
 
 
-# --- v2 Financial metrics ---
+# --- 金融メトリクス ---
 
 def sharpe_ratio(returns, risk_free_rate=0.0):
     """Annualized Sharpe Ratio.

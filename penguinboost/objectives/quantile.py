@@ -1,4 +1,4 @@
-"""Quantile regression and CVaR objectives for PenguinBoost v2."""
+"""分位点回帰および CVaR 目的関数。"""
 
 import numpy as np
 

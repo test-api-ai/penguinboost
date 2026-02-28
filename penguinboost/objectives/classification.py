@@ -15,7 +15,7 @@ class BinaryLoglossObjective:
 
     def init_score(self, y):
         p = np.clip(np.mean(y), 1e-7, 1 - 1e-7)
-        return np.log(p / (1 - p))  # log-odds
+        return np.log(p / (1 - p))  # 対数オッズ
 
     def gradient(self, y, pred):
         p = _sigmoid(pred)

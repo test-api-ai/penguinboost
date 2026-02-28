@@ -10,7 +10,7 @@ to improve uniformly across all time periods.
 import numpy as np
 
 
-# ── Shared helpers ────────────────────────────────────────────────────────────
+# ── 共有ヘルパー ──────────────────────────────────────────────────────────────
 
 def _rankdata(x):
     """Rank with stable argsort (1-indexed, simple tie order)."""
@@ -37,7 +37,7 @@ def _softmax(x, temperature=1.0):
     return e / e.sum()
 
 
-# ── Era boosting ──────────────────────────────────────────────────────────────
+# ── エラブースティング ────────────────────────────────────────────────────────
 
 class EraBoostingReweighter:
     """Era-aware sample reweighting for gradient boosting.
@@ -96,45 +96,45 @@ class EraBoostingReweighter:
         n_eras = len(era_labels)
         n_samples = len(predictions)
 
-        # --- Per-era Spearman correlation ---
+        # --- エラごとのスピアマン相関 ---
         era_corrs = np.array([
             _spearman_corr(predictions[eras == e], targets[eras == e])
             for e in era_labels
         ])
 
-        # --- Era-level weights ---
+        # --- エラレベルの重み ---
         if self.method == 'hard_era':
-            # Upweight eras with low Spearman correlation
+            # 低スピアマン相関のエラを重みアップ
             era_weights = _softmax(-era_corrs, self.temperature)
 
         elif self.method == 'sharpe_reweight':
             mu = era_corrs.mean()
             sigma = era_corrs.std() + 1e-9
             # ∂Sharpe/∂ρ_e = (σ² - μ·(ρ_e - μ)) / (n_eras · σ³)
-            # Eras below mean get higher Sharpe gradient → more weight
+            # 平均未満のエラは Sharpe 勾配が大きい → 重みが増える
             sharpe_grad = (sigma**2 - mu * (era_corrs - mu)) / (n_eras * sigma**3)
-            # Use softmax over positive Sharpe gradients
+            # 正の Sharpe 勾配に対してソフトマックス適用
             era_weights = _softmax(sharpe_grad, self.temperature)
 
         else:  # 'proportional'
-            # Weight ∝ 1 - |ρ| (harder eras get more weight, never zero)
+            # 重み ∝ 1 - |ρ|（難しいエラほど大きな重み、ゼロにならない）
             raw = 1.0 - np.abs(era_corrs)
             raw = np.clip(raw, 1e-6, None)
             era_weights = raw / raw.sum()
 
-        # --- Enforce minimum era weight to prevent starvation ---
+        # --- スターベーション防止のための最小エラ重みを強制 ---
         min_w = self.min_era_weight / n_eras
         era_weights = np.clip(era_weights, min_w, None)
         era_weights /= era_weights.sum()
 
-        # --- Map era weights → sample weights (uniform within each era) ---
+        # --- エラ重みをサンプル重みにマップ（エラ内は均一） ---
         sample_weights = np.ones(n_samples)
         for i, era in enumerate(era_labels):
             mask = eras == era
             n_in_era = mask.sum()
             if n_in_era == 0:
                 continue
-            # Scale: era weight × (n_samples / n_in_era) so weights sum to n_eras
+            # スケール: エラ重み × (n_samples / n_in_era)、重みの合計が n_eras になる
             sample_weights[mask] = era_weights[i] * n_samples / n_in_era
 
         return sample_weights

@@ -23,7 +23,7 @@
 pip install pybind11
 
 # ソースからインストール（C++ 拡張モジュールがビルドされます）
-git clone https://github.com/<your-org>/penguinboost.git
+git clone https://github.com/test-api-ai/penguinboost.git
 cd penguinboost
 pip install .
 ```

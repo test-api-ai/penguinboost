@@ -58,7 +58,7 @@ class OrderedTargetEncoder:
             col = X[:, j]
             encoded = np.full(len(y), self.global_mean_, dtype=np.float64)
 
-            # Accumulate stats in permutation order
+            # 順列順に統計を蓄積
             cat_sum = {}
             cat_count = {}
 

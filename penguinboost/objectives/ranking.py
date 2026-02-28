@@ -75,7 +75,7 @@ class LambdaRankObjective:
         gradients = np.zeros(n, dtype=np.float64)
         hessians = np.zeros(n, dtype=np.float64)
 
-        # Ideal DCG for delta NDCG
+        # デルタ NDCG のための理想 DCG
         ideal_dcg = self._dcg(np.sort(relevance)[::-1])
         if ideal_dcg == 0:
             return gradients, np.ones(n, dtype=np.float64)
@@ -88,14 +88,14 @@ class LambdaRankObjective:
                 if relevance[si] == relevance[sj]:
                     continue
 
-                # Ensure higher relevance is "positive"
+                # より高い関連性を "正" として確保
                 if relevance[si] < relevance[sj]:
                     si, sj = sj, si
 
                 score_diff = self.sigma * (scores[si] - scores[sj])
                 rho = 1.0 / (1.0 + np.exp(score_diff))
 
-                # Delta NDCG
+                # デルタ NDCG
                 gain_i = (2.0 ** relevance[si] - 1)
                 gain_j = (2.0 ** relevance[sj] - 1)
                 disc_i = 1.0 / np.log2(i + 2)

@@ -1,4 +1,4 @@
-"""Monotone constraints for PenguinBoost v2."""
+"""単調制約。"""
 
 import numpy as np
 
@@ -40,10 +40,10 @@ class MonotoneConstraintChecker:
         if constraint == 0:
             return True
         if constraint == 1:
-            # Increasing: right >= left (higher bin values -> higher predictions)
+            # 単調増加：右 >= 左（高いビン値 → 高い予測）
             return right_value >= left_value
         if constraint == -1:
-            # Decreasing: right <= left
+            # 単調減少：右 <= 左
             return right_value <= left_value
         return True
 

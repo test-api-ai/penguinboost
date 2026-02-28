@@ -1,4 +1,4 @@
-"""DART (Dropout Additive Regression Trees) from XGBoost for PenguinBoost v2."""
+"""DART (Dropout Additive Regression Trees) from XGBoost."""
 
 import numpy as np
 
@@ -41,16 +41,16 @@ class DARTManager:
             self._dropped_indices = []
             return self._dropped_indices
 
-        # Possibly skip dropout entirely
+        # ドロップアウトを完全にスキップする可能性
         if self.skip_drop > 0 and rng.random() < self.skip_drop:
             self._dropped_indices = []
             return self._dropped_indices
 
-        # Each tree dropped independently with drop_rate
+        # 各ツリーを drop_rate の確率で独立にドロップ
         mask = rng.random(n_trees) < self.drop_rate
         self._dropped_indices = np.where(mask)[0].tolist()
 
-        # Ensure at least one tree remains (don't drop all)
+        # 少なくとも 1 本のツリーを残す（全ドロップを防止）
         if len(self._dropped_indices) == n_trees and n_trees > 0:
             keep = rng.randint(n_trees)
             self._dropped_indices.remove(keep)

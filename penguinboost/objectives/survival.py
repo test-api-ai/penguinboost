@@ -35,11 +35,11 @@ class CoxObjective:
         n = len(times)
         risk_scores = np.exp(pred)
 
-        # Sort by time descending for efficient risk set computation
+        # リスクセット計算を効率化するために時刻降順でソート
         order = np.argsort(-times)
         gradients = np.zeros(n, dtype=np.float64)
 
-        # Cumulative sum of risk scores (from largest time to smallest)
+        # リスクスコアの累積和（最大時刻から最小時刻へ）
         cum_risk = 0.0
         cum_risk_arr = np.zeros(n, dtype=np.float64)
 
@@ -47,17 +47,17 @@ class CoxObjective:
             cum_risk += risk_scores[idx]
             cum_risk_arr[idx] = cum_risk
 
-        # Re-sort by time ascending for computing gradients
+        # 勾配計算のために時刻昇順で再ソート
         order_asc = np.argsort(times)
 
-        # For each event, compute gradient contribution
+        # 各イベントの勾配寄与を計算
         for idx in order_asc:
             if events[idx]:
-                # Risk set: all samples with time >= times[idx]
+                # リスクセット: times[idx] 以上の全サンプル
                 at_risk = times >= times[idx]
                 risk_sum = risk_scores[at_risk].sum()
                 if risk_sum > 0:
-                    gradients[idx] -= 1.0  # from the event term
+                    gradients[idx] -= 1.0  # イベント項から
                     gradients[at_risk] += risk_scores[at_risk] / risk_sum
 
         self._cached_pred = pred

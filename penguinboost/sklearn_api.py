@@ -1,4 +1,4 @@
-"""scikit-learn compatible API wrappers for PenguinBoost v2."""
+"""PenguinBoost の scikit-learn 互換 API ラッパー。"""
 
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
@@ -14,7 +14,7 @@ from penguinboost.utils import check_array, check_target
 
 
 class _PenguinBoostBase(BaseEstimator):
-    """Base class with shared parameters and logic (v2)."""
+    """共通パラメータとロジックを持つ基底クラス。"""
 
     def __init__(self, n_estimators=100, learning_rate=0.1, max_depth=6,
                  max_leaves=31, growth="leafwise", reg_lambda=1.0,
@@ -24,7 +24,6 @@ class _PenguinBoostBase(BaseEstimator):
                  use_ordered_boosting=False, n_permutations=4,
                  cat_features=None, cat_smoothing=10.0, efb_threshold=0.0,
                  early_stopping_rounds=None, importance_type="gain",
-                 # v2 params
                  use_dart=False, dart_drop_rate=0.1, dart_skip_drop=0.0,
                  use_gradient_perturbation=False,
                  gradient_clip_tau=5.0, gradient_noise_eta=0.1,
@@ -32,7 +31,6 @@ class _PenguinBoostBase(BaseEstimator):
                  monotone_constraints=None,
                  use_temporal_reg=False, temporal_rho=0.1,
                  symmetric_depth=3,
-                 # v3 params
                  use_orthogonal_gradients=False,
                  orthogonal_strength=1.0, orthogonal_eps=1e-4,
                  orthogonal_features=None,
@@ -63,7 +61,6 @@ class _PenguinBoostBase(BaseEstimator):
         self.efb_threshold = efb_threshold
         self.early_stopping_rounds = early_stopping_rounds
         self.importance_type = importance_type
-        # v2
         self.use_dart = use_dart
         self.dart_drop_rate = dart_drop_rate
         self.dart_skip_drop = dart_skip_drop
@@ -77,7 +74,6 @@ class _PenguinBoostBase(BaseEstimator):
         self.use_temporal_reg = use_temporal_reg
         self.temporal_rho = temporal_rho
         self.symmetric_depth = symmetric_depth
-        # v3
         self.use_orthogonal_gradients = use_orthogonal_gradients
         self.orthogonal_strength = orthogonal_strength
         self.orthogonal_eps = orthogonal_eps
@@ -114,7 +110,6 @@ class _PenguinBoostBase(BaseEstimator):
             cat_smoothing=self.cat_smoothing,
             efb_threshold=self.efb_threshold,
             early_stopping_rounds=self.early_stopping_rounds,
-            # v2
             use_dart=self.use_dart,
             dart_drop_rate=self.dart_drop_rate,
             dart_skip_drop=self.dart_skip_drop,
@@ -128,7 +123,6 @@ class _PenguinBoostBase(BaseEstimator):
             use_temporal_reg=self.use_temporal_reg,
             temporal_rho=self.temporal_rho,
             symmetric_depth=self.symmetric_depth,
-            # v3
             use_orthogonal_gradients=self.use_orthogonal_gradients,
             orthogonal_strength=self.orthogonal_strength,
             orthogonal_eps=self.orthogonal_eps,
@@ -149,16 +143,16 @@ class _PenguinBoostBase(BaseEstimator):
 
 
 class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
-    """PenguinBoost regressor with scikit-learn compatible API.
+    """PenguinBoost の scikit-learn 互換回帰器。
 
     Parameters
     ----------
     objective : str
-        Loss function: 'mse' (default), 'mae', or 'huber'.
+        損失関数: 'mse'（デフォルト）、'mae'、'huber'。
     huber_delta : float
-        Delta parameter for Huber loss (default 1.0).
+        Huber 損失のデルタパラメータ（デフォルト 1.0）。
 
-    See _PenguinBoostBase for other parameters.
+    その他のパラメータは _PenguinBoostBase を参照。
     """
 
     def __init__(self, objective="mse", huber_delta=1.0,
@@ -177,7 +171,6 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
                  monotone_constraints=None,
                  use_temporal_reg=False, temporal_rho=0.1,
                  symmetric_depth=3,
-                 # v3 params
                  use_orthogonal_gradients=False,
                  orthogonal_strength=1.0, orthogonal_eps=1e-4,
                  orthogonal_features=None,
@@ -219,7 +212,7 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
         self.huber_delta = huber_delta
 
     def fit(self, X, y, eval_set=None, era_indices=None):
-        """Fit the regressor.
+        """回帰器を学習する。
 
         Parameters
         ----------
@@ -227,8 +220,8 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
         y : array-like of shape (n_samples,)
         eval_set : tuple (X_val, y_val) or None
         era_indices : array-like of shape (n_samples,) or None
-            Era (time-period) labels. Required for era boosting and
-            era-conditional objectives (MaxSharpeEraObjective).
+            エラ（時間期間）ラベル。エラブースティングと
+            エラ条件付き目的関数（MaxSharpeEraObjective）に必要。
 
         Returns
         -------
@@ -256,33 +249,33 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
         X = check_array(X)
         return self.engine_.predict(X)
 
-    # ── v3: Post-training utilities ─────────────────────────────────────────
+    # ── 事後学習ユーティリティ ─────────────────────────────────────────
 
     def neutralize(self, predictions, X, proportion=1.0, per_era=False,
                    eras=None, features=None):
-        """Post-training feature neutralization (Numerai-style).
+        """事後学習フィーチャー中立化（Numerai スタイル）。
 
-        Removes the linearly feature-explainable component of predictions.
+        予測値の線形特徴量説明可能成分を除去する。
 
         Parameters
         ----------
         predictions : array-like of shape (n_samples,)
-            Model predictions to neutralize.
+            中立化する予測値。
         X : array-like of shape (n_samples, n_features)
-            Feature matrix used for neutralization.
+            中立化に使用する特徴量行列。
         proportion : float in [0, 1]
-            Fraction of feature exposure to remove. Default 1.0 (full).
+            除去する特徴量エクスポージャーの割合。デフォルト 1.0（完全除去）。
         per_era : bool
-            If True, apply neutralization within each era separately.
+            True の場合、各エラ内で個別に中立化を適用する。
         eras : array-like or None
-            Era labels (required when per_era=True).
+            エララベル（per_era=True 時に必要）。
         features : list of int or None
-            Feature column indices to neutralize against. None = all.
+            中立化対象の特徴量列インデックス。None = 全特徴量。
 
         Returns
         -------
         np.ndarray of shape (n_samples,)
-            Neutralized predictions.
+            中立化後の予測値。
         """
         from penguinboost.core.neutralization import FeatureNeutralizer
         predictions = np.asarray(predictions, dtype=np.float64)
@@ -293,19 +286,19 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
             per_era=per_era, eras=eras)
 
     def feature_exposure(self, X, predictions=None, features=None):
-        """Compute per-feature Pearson correlation between predictions and X.
+        """予測値と X の特徴量ごとのピアソン相関を計算する。
 
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
         predictions : array-like or None
-            If None, predictions are computed from X using this model.
+            None の場合、このモデルで X から予測値を計算する。
         features : list of int or None
 
         Returns
         -------
         np.ndarray of shape (n_features,)
-            Correlation of predictions with each feature column.
+            各特徴量列との予測値の相関。
         """
         from penguinboost.core.neutralization import FeatureNeutralizer
         X = check_array(X)
@@ -316,9 +309,9 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
 
 
 class PenguinBoostClassifier(_PenguinBoostBase, ClassifierMixin):
-    """PenguinBoost classifier with scikit-learn compatible API.
+    """PenguinBoost の scikit-learn 互換分類器。
 
-    Supports binary and multiclass classification.
+    2 値分類と多値分類をサポートする。
     """
 
     def fit(self, X, y, eval_set=None):
@@ -350,7 +343,7 @@ class PenguinBoostClassifier(_PenguinBoostBase, ClassifierMixin):
         return self
 
     def _fit_multiclass(self, X, y, obj, init_scores):
-        """Train separate boosting engines for each class."""
+        """クラスごとに個別のブースティングエンジンを学習する。"""
         n_samples = len(y)
         self.engines_ = []
         predictions = np.tile(init_scores, (n_samples, 1))
@@ -402,7 +395,7 @@ class PenguinBoostClassifier(_PenguinBoostBase, ClassifierMixin):
 
 
 class PenguinBoostRanker(_PenguinBoostBase):
-    """PenguinBoost ranker for learning-to-rank tasks."""
+    """PenguinBoost の学習ランキング用ランカー。"""
 
     def fit(self, X, y, group, eval_set=None, eval_group=None):
         X = check_array(X)
@@ -422,7 +415,7 @@ class PenguinBoostRanker(_PenguinBoostBase):
 
 
 class PenguinBoostSurvival(_PenguinBoostBase):
-    """PenguinBoost for survival analysis (Cox PH model)."""
+    """PenguinBoost の生存分析器（Cox PH モデル）。"""
 
     def fit(self, X, times, events, eval_set=None):
         X = check_array(X)
@@ -449,16 +442,16 @@ class PenguinBoostSurvival(_PenguinBoostBase):
 
 
 class PenguinBoostQuantileRegressor(_PenguinBoostBase, RegressorMixin):
-    """PenguinBoost quantile regressor for VaR/CVaR estimation.
+    """PenguinBoost の分位点回帰器（VaR/CVaR 推定用）。
 
     Parameters
     ----------
     objective : str
-        'quantile' for pinball loss, 'cvar' for CVaR/Expected Shortfall.
+        'quantile'（ピンボール損失）または 'cvar'（CVaR/期待ショートフォール）。
     alpha : float
-        Quantile level (e.g. 0.05 for 5th percentile VaR).
+        分位点水準（例: 5% VaR の場合は 0.05）。
 
-    See _PenguinBoostBase for other parameters.
+    その他のパラメータは _PenguinBoostBase を参照。
     """
 
     def __init__(self, objective="quantile", alpha=0.5,
@@ -477,7 +470,6 @@ class PenguinBoostQuantileRegressor(_PenguinBoostBase, RegressorMixin):
                  monotone_constraints=None,
                  use_temporal_reg=False, temporal_rho=0.1,
                  symmetric_depth=3,
-                 # v3 params
                  use_orthogonal_gradients=False,
                  orthogonal_strength=1.0, orthogonal_eps=1e-4,
                  orthogonal_features=None,

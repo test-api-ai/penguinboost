@@ -1,16 +1,16 @@
-"""Rank-correlation and financial objectives for PenguinBoost v3.
+"""ランク相関および金融向け目的関数。
 
-Numerai-inspired objectives for stock return prediction:
-- SpearmanObjective: optimizes rank correlation via rank-target MSE
-- MaxSharpeEraObjective: maximizes Sharpe ratio of per-era Spearman correlations
-- FeatureExposurePenalizedObjective: adds exposure-reduction penalty to any objective
+Numerai にインスパイアされた株式リターン予測向け目的関数:
+- SpearmanObjective: ランクターゲット MSE によるランク相関の最適化
+- MaxSharpeEraObjective: エラごとのスピアマン相関のシャープ比を最大化
+- FeatureExposurePenalizedObjective: 任意の目的関数に露出削減ペナルティを追加
 """
 
 import numpy as np
 from penguinboost.core.era_boost import _rankdata, _spearman_corr
 
 
-# ── Helper ─────────────────────────────────────────────────────────────────────
+# ── ヘルパー ───────────────────────────────────────────────────────────────────
 
 def _rank_normalize(y):
     """Map y to uniformly-spaced ranks in (-1, 1).
@@ -25,7 +25,7 @@ def _rank_normalize(y):
     return normalized * 2 - 1             # -1..1  (zero-mean when symmetric)
 
 
-# ── Spearman objective ─────────────────────────────────────────────────────────
+# ── スピアマン目的関数 ─────────────────────────────────────────────────────────
 
 class SpearmanObjective:
     """Approximate Spearman rank correlation objective.
@@ -56,7 +56,7 @@ class SpearmanObjective:
         self.corr_correction = corr_correction
         self._y_rank = None
 
-    # ── Objective interface ────────────────────────────────────────────────────
+    # ── 目的関数インターフェース ───────────────────────────────────────────────
 
     def init_score(self, y):
         """Initialize predictions to median rank (0.0 after normalization)."""
@@ -76,8 +76,8 @@ class SpearmanObjective:
         g = pred - r                                 # rank-MSE gradient
 
         if self.corr_correction > 0.0 and pred.std() > 1e-9:
-            # Pearson corr(P, r) gradient correction:
-            # corrects for scale mismatch between P and r
+            # ピアソン corr(P, r) 勾配補正:
+            # P と r のスケールのミスマッチを補正
             corr = float(np.corrcoef(pred, r)[0, 1]) if np.isfinite(np.corrcoef(pred, r)[0, 1]) else 0.0
             p_centered = pred - pred.mean()
             correction = corr * p_centered / (pred.std() + 1e-9) / (r.std() + 1e-9)
@@ -96,7 +96,7 @@ class SpearmanObjective:
         return float(np.mean((pred - self._y_rank) ** 2))
 
 
-# ── MaxSharpe Era objective ────────────────────────────────────────────────────
+# ── MaxSharpe エラ目的関数 ────────────────────────────────────────────────────
 
 class MaxSharpeEraObjective:
     """Maximize the Sharpe ratio of per-era Spearman correlations.
@@ -154,7 +154,7 @@ class MaxSharpeEraObjective:
     def gradient(self, y, pred):
         """Compute Sharpe-maximizing gradient over eras."""
         if self._eras is None:
-            # Fallback: standard Spearman gradient
+            # フォールバック: 標準スピアマン勾配
             if self._y_rank is None:
                 self._y_rank = _rank_normalize(y).astype(np.float64)
             return pred - self._y_rank
@@ -163,19 +163,19 @@ class MaxSharpeEraObjective:
         g = np.zeros(n, dtype=np.float64)
         n_eras = len(self._era_labels)
 
-        # --- 1. Per-era Spearman correlations ---
+        # --- 1. エラごとのスピアマン相関 ---
         era_corrs = np.array([
             _spearman_corr(pred[self._eras == e], y[self._eras == e])
             for e in self._era_labels
         ])
 
-        # --- 2. Sharpe gradient w.r.t. each era's correlation ---
+        # --- 2. 各エラの相関に対するシャープ勾配 ---
         mu = era_corrs.mean()
         sigma = era_corrs.std() + self.corr_eps
-        # ∂(μ/σ)/∂ρ_e  — negative since we minimise in engine
+        # ∂(μ/σ)/∂ρ_e  — エンジンで最小化するため負
         sharpe_weights = (sigma**2 - mu * (era_corrs - mu)) / (n_eras * sigma**3)
 
-        # --- 3. Era-conditional gradient ∂ρ_e/∂P_i via Pearson approx ---
+        # --- 3. ピアソン近似によるエラ条件付き勾配 ∂ρ_e/∂P_i ---
         for idx, era in enumerate(self._era_labels):
             mask = self._eras == era
             n_e = int(mask.sum())
@@ -194,7 +194,7 @@ class MaxSharpeEraObjective:
             # ∂ρ_e/∂P_i ≈ (r_ei - r̄_e) / (n_e · σ_P · σ_r)
             corr_grad = (r_e - r_bar) / (n_e * sigma_P * sigma_r)
 
-            # Sharpe gradient: minimize negative Sharpe → negate
+            # シャープ勾配: 負のシャープを最小化 → 符号反転
             g[mask] = -sharpe_weights[idx] * corr_grad
 
         return g
@@ -225,7 +225,7 @@ class MaxSharpeEraObjective:
         return float(-mu / sigma)   # negative Sharpe (we minimise)
 
 
-# ── Feature exposure penalty ───────────────────────────────────────────────────
+# ── 特徴量露出ペナルティ ───────────────────────────────────────────────────────
 
 class FeatureExposurePenalizedObjective:
     """Wraps any objective with a feature exposure reduction penalty.
@@ -266,7 +266,7 @@ class FeatureExposurePenalizedObjective:
         self._X_std = X_sub.std(axis=0) + 1e-9
         self._n_feat = X_sub.shape[1]
 
-    # ── Objective interface ────────────────────────────────────────────────────
+    # ── 目的関数インターフェース ───────────────────────────────────────────────
 
     def init_score(self, y):
         return self.base_objective.init_score(y)
@@ -280,7 +280,7 @@ class FeatureExposurePenalizedObjective:
     def loss(self, y, pred):
         return self.base_objective.loss(y, pred)
 
-    # ── Exposure gradient ──────────────────────────────────────────────────────
+    # ── 露出勾配 ──────────────────────────────────────────────────────────────
 
     def _exposure_gradient(self, pred):
         """Gradient of Σ_k corr(P, X_k)² w.r.t. P.
@@ -292,13 +292,13 @@ class FeatureExposurePenalizedObjective:
         P_centered = pred - pred.mean()
 
         # corr_k = (X_k - X̄_k)^T P_centered / (n · std_P · std_k)
-        # Shape: (n_features,)
+        # 形状: (n_features,)
         corr = (self._X_centered.T @ P_centered) / (n * std_P * self._X_std)
 
-        # Linear term:   Σ_k (corr_k / std_k) · (X_ki - X̄_k) / (n · std_P)
+        # 線形項: Σ_k (corr_k / std_k) · (X_ki - X̄_k) / (n · std_P)
         linear = (self._X_centered @ (corr / self._X_std)) / (n * std_P)
 
-        # Quadratic term: P_centered · Σ_k corr_k² / (n · std_P²)
+        # 二次項: P_centered · Σ_k corr_k² / (n · std_P²)
         quadratic = P_centered * float(corr @ corr) / (n * std_P**2)
 
         return 2.0 * self.lambda_fe * (linear - quadratic)
