@@ -1,0 +1,121 @@
+PenguinBoost
+Copyright (c) 2026 S.I
+
+This software is released under the MIT License.
+See LICENSE for the full license text.
+
+================================================================================
+THIRD-PARTY LIBRARIES
+================================================================================
+
+This software depends on the following third-party libraries at runtime or
+build time. Their respective licenses are listed below.
+
+--------------------------------------------------------------------------------
+pybind11
+  License  : BSD 3-Clause
+  Copyright: Copyright (c) 2016 Wenzel Jakob <wenzel.jakob@epfl.ch>, and others
+  Source   : https://github.com/pybind/pybind11
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+  2. Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+  3. Neither the name of the copyright holder nor the names of its contributors
+     may be used to endorse or promote products derived from this software
+     without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED.
+
+--------------------------------------------------------------------------------
+NumPy
+  License  : BSD 3-Clause
+  Copyright: Copyright (c) 2005-2024, NumPy Developers
+  Source   : https://github.com/numpy/numpy
+
+--------------------------------------------------------------------------------
+scikit-learn
+  License  : BSD 3-Clause
+  Copyright: Copyright (c) 2007-2024, scikit-learn developers
+  Source   : https://github.com/scikit-learn/scikit-learn
+
+
+================================================================================
+ALGORITHMIC REFERENCES
+================================================================================
+
+PenguinBoost implements algorithms and techniques described in the following
+papers and projects. No source code was copied from these projects; this
+section serves as attribution for the ideas and methods used.
+
+--------------------------------------------------------------------------------
+XGBoost
+  Project  : https://github.com/dmlc/xgboost
+  License  : Apache 2.0
+  Reference:
+    Tianqi Chen and Carlos Guestrin.
+    "XGBoost: A Scalable Tree Boosting System."
+    Proceedings of the 22nd ACM SIGKDD International Conference on
+    Knowledge Discovery and Data Mining (KDD), 2016.
+    https://arxiv.org/abs/1603.02754
+
+  Techniques used in PenguinBoost:
+  - L1/L2 regularized leaf weight formula
+  - Second-order gradient (hessian) based split gain
+  - Minimum child weight / minimum child samples constraints
+
+--------------------------------------------------------------------------------
+LightGBM
+  Project  : https://github.com/microsoft/LightGBM
+  License  : MIT
+  Reference:
+    Guolin Ke, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma,
+    Qiwei Ye, and Tie-Yan Liu.
+    "LightGBM: A Highly Efficient Gradient Boosting Decision Tree."
+    Advances in Neural Information Processing Systems (NeurIPS), 2017.
+    https://papers.nips.cc/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html
+
+  Techniques used in PenguinBoost:
+  - Histogram-based split finding with bin subtraction trick
+  - Leaf-wise (best-first) tree growth
+  - Gradient-based One-Side Sampling (GOSS)
+  - Exclusive Feature Bundling (EFB)
+  - NaN bin handling
+
+--------------------------------------------------------------------------------
+CatBoost
+  Project  : https://github.com/catboost/catboost
+  License  : Apache 2.0
+  Reference:
+    Liudmila Prokhorenkova, Gleb Gusev, Aleksandr Vorobev,
+    Anna Veronika Dorogush, and Andrey Gulin.
+    "CatBoost: unbiased boosting with categorical features."
+    Advances in Neural Information Processing Systems (NeurIPS), 2018.
+    https://arxiv.org/abs/1706.09516
+
+  Techniques used in PenguinBoost:
+  - Ordered (target statistic) boosting to reduce prediction shift
+  - Ordered target encoding for categorical features
+  - Symmetric (oblivious) tree growth
+
+--------------------------------------------------------------------------------
+Numerai
+  Project  : https://numer.ai
+  GitHub   : https://github.com/numerai
+  Forum    : https://forum.numer.ai
+  Docs     : https://docs.numer.ai
+
+  Techniques used in PenguinBoost (v3 financial ML features):
+  - Era-based cross-validation and per-era performance weighting
+    https://docs.numer.ai/numerai-tournament/scoring/correlation
+  - Feature neutralization (removing linearly feature-explainable
+    components from predictions)
+    https://docs.numer.ai/numerai-tournament/feature-neutralization
+  - Feature exposure penalty to reduce correlation with input features
+  - Sharpe ratio maximization across eras as a training objective

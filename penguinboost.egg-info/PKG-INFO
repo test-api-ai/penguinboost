@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: penguinboost
+Version: 0.3.0
+Summary: Hybrid gradient boosting library fusing LightGBM and CatBoost techniques
+Requires-Python: >=3.9
+License-File: LICENSE
+License-File: NOTICE
+Requires-Dist: numpy>=1.21
+Requires-Dist: scikit-learn>=1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Dynamic: license-file
