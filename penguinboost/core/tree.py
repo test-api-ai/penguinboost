@@ -64,7 +64,8 @@ class DecisionTree:
                  reg_lambda=1.0, reg_alpha=0.0, min_child_weight=1.0,
                  min_child_samples=1, max_bins=255, symmetric_depth=3,
                  adaptive_reg=None, monotone_checker=None,
-                 iteration=0, total_iterations=1):
+                 iteration=0, total_iterations=1,
+                 era_adversarial_data=None):
         self.max_depth = max_depth
         self.max_leaves = max_leaves
         self.growth = growth
@@ -78,6 +79,8 @@ class DecisionTree:
         self.monotone_checker = monotone_checker
         self.iteration = iteration
         self.total_iterations = total_iterations
+        # era_adversarial_data: dict with keys 'era_ids' (int arr), 'n_eras', 'beta'
+        self.era_adversarial_data = era_adversarial_data
         self.hist_builder = HistogramBuilder(max_bins)
         self.root = None
         self.split_features_ = []
@@ -422,6 +425,20 @@ class DecisionTree:
 
         grad_hist, hess_hist, count_hist = hist
 
+        # Era-adversarial split regularization (optional)
+        era_penalty = None
+        era_beta = 0.0
+        if self.era_adversarial_data is not None:
+            ead = self.era_adversarial_data
+            era_ids_node = ead['era_ids'][node.sample_indices]
+            era_g, era_h = self.hist_builder.build_era_histograms(
+                X_binned, gradients, hessians,
+                era_ids_node, ead['n_eras'],
+                sample_indices=node.sample_indices)
+            era_penalty = self.hist_builder._era_adversarial_penalty(
+                era_g, era_h, self.reg_lambda)
+            era_beta = ead['beta']
+
         feat, bin_thresh, gain, nan_dir = self.hist_builder.find_best_split(
             grad_hist, hess_hist, count_hist,
             self.reg_lambda, self.reg_alpha,
@@ -429,7 +446,9 @@ class DecisionTree:
             adaptive_reg=self.adaptive_reg,
             iteration=self.iteration,
             total_iterations=self.total_iterations,
-            monotone_checker=self.monotone_checker)
+            monotone_checker=self.monotone_checker,
+            era_adversarial_penalty=era_penalty,
+            era_adversarial_beta=era_beta)
 
         if feat < 0 or gain <= 0:
             return None, hist

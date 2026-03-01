@@ -124,3 +124,93 @@ class FeatureStabilityTracker:
         if len(gains) < 2:
             return 0.0
         return self.psi * np.var(gains)
+
+
+class EraAdaptiveGradientClipper:
+    """Adaptive gradient clipping using per-era Median Absolute Deviation.
+
+    Standard gradient clipping uses a fixed global threshold, which fails
+    in financial data where each era (time period) has its own volatility
+    regime. This clipper computes the MAD within each era independently
+    and clips each sample relative to its era's local scale:
+
+        g_i^{clipped} = sign(g_i) * min(|g_i|, c * MAD_{era(i)})
+
+    where MAD_{era}(g) = median(|g_i - median(g_i)|) for all i in the era.
+
+    This prevents fat-tail samples in high-volatility eras from dominating
+    the gradient signal while preserving within-era gradient structure.
+
+    Parameters
+    ----------
+    clip_multiplier : float
+        Number of MADs to use as the clipping threshold (c).
+        Recommended range 3.0–6.0. Larger values → softer clipping.
+    min_mad : float
+        Minimum MAD to avoid division by zero in flat regions.
+    """
+
+    def __init__(self, clip_multiplier=4.0, min_mad=1e-8):
+        self.clip_multiplier = clip_multiplier
+        self.min_mad = min_mad
+
+    def clip(self, gradients, era_indices):
+        """Apply per-era MAD-based gradient clipping.
+
+        Parameters
+        ----------
+        gradients : np.ndarray of shape (n_samples,)
+            Raw gradient values from the objective function.
+        era_indices : np.ndarray of shape (n_samples,)
+            Era label for each sample.
+
+        Returns
+        -------
+        np.ndarray of shape (n_samples,)
+            Clipped gradients. Samples outside the era-adaptive threshold
+            are hard-clipped to ±(c * MAD_era).
+        """
+        clipped = gradients.copy()
+        for era in np.unique(era_indices):
+            mask = era_indices == era
+            g_era = gradients[mask]
+            if len(g_era) < 2:
+                continue
+            med = np.median(g_era)
+            mad = np.median(np.abs(g_era - med))
+            mad = max(mad, self.min_mad)
+            threshold = self.clip_multiplier * mad
+            abs_g = np.abs(g_era)
+            clipped[mask] = np.sign(g_era) * np.minimum(abs_g, threshold)
+        return clipped
+
+    def clip_with_stats(self, gradients, era_indices):
+        """Clip gradients and return per-era clipping statistics.
+
+        Returns
+        -------
+        clipped : np.ndarray
+            Clipped gradients.
+        stats : dict
+            Mapping era_label → {'mad': float, 'threshold': float,
+                                  'frac_clipped': float}
+        """
+        clipped = gradients.copy()
+        stats = {}
+        for era in np.unique(era_indices):
+            mask = era_indices == era
+            g_era = gradients[mask]
+            if len(g_era) < 2:
+                stats[era] = {'mad': 0.0, 'threshold': float('inf'),
+                              'frac_clipped': 0.0}
+                continue
+            med = np.median(g_era)
+            mad = np.median(np.abs(g_era - med))
+            mad = max(mad, self.min_mad)
+            threshold = self.clip_multiplier * mad
+            abs_g = np.abs(g_era)
+            clipped[mask] = np.sign(g_era) * np.minimum(abs_g, threshold)
+            frac = float((abs_g > threshold).mean())
+            stats[era] = {'mad': float(mad), 'threshold': float(threshold),
+                          'frac_clipped': frac}
+        return clipped, stats

@@ -14,13 +14,21 @@ try:
 except ImportError:
     _HAS_CPP = False
 from penguinboost.core.tree import DecisionTree
-from penguinboost.core.sampling import GOSSSampler
+from penguinboost.core.sampling import GOSSSampler, TemporallyWeightedGOSSSampler
 from penguinboost.core.binning import FeatureBinner
 from penguinboost.core.categorical import OrderedTargetEncoder
-from penguinboost.core.regularization import AdaptiveRegularizer, GradientPerturber
-from penguinboost.core.dart import DARTManager
+from penguinboost.core.regularization import (
+    AdaptiveRegularizer, GradientPerturber, EraAdaptiveGradientClipper)
+from penguinboost.core.dart import DARTManager, EraAwareDARTManager
 from penguinboost.core.monotone import MonotoneConstraintChecker
 from penguinboost.core.financial import TemporalRegularizer
+
+
+def _era_to_int(era_indices):
+    """Convert arbitrary era labels to consecutive integers 0..n_eras-1."""
+    labels = np.unique(era_indices)
+    label_map = {lab: i for i, lab in enumerate(labels)}
+    return np.array([label_map[e] for e in era_indices], dtype=np.int32)
 
 
 class BoostingEngine:
@@ -124,6 +132,14 @@ class BoostingEngine:
                  era_boosting_method='hard_era', era_boosting_temp=1.0,
                  use_feature_exposure_penalty=False,
                  feature_exposure_lambda=0.1, exposure_penalty_features=None,
+                 # ── New financial-domain features ──────────────────────────
+                 use_tw_goss=False, tw_goss_decay=0.01,
+                 use_era_gradient_clipping=False, era_clip_multiplier=4.0,
+                 use_era_aware_dart=False, era_dart_var_scale=20.0,
+                 use_sharpe_early_stopping=False,
+                 sharpe_es_patience=50,
+                 use_sharpe_tree_reg=False, sharpe_reg_threshold=0.5,
+                 use_era_adversarial_split=False, era_adversarial_beta=0.3,
                  verbose=0, random_state=None):
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -169,6 +185,18 @@ class BoostingEngine:
         self.use_feature_exposure_penalty = use_feature_exposure_penalty
         self.feature_exposure_lambda = feature_exposure_lambda
         self.exposure_penalty_features = exposure_penalty_features
+        self.use_tw_goss = use_tw_goss
+        self.tw_goss_decay = tw_goss_decay
+        self.use_era_gradient_clipping = use_era_gradient_clipping
+        self.era_clip_multiplier = era_clip_multiplier
+        self.use_era_aware_dart = use_era_aware_dart
+        self.era_dart_var_scale = era_dart_var_scale
+        self.use_sharpe_early_stopping = use_sharpe_early_stopping
+        self.sharpe_es_patience = sharpe_es_patience
+        self.use_sharpe_tree_reg = use_sharpe_tree_reg
+        self.sharpe_reg_threshold = sharpe_reg_threshold
+        self.use_era_adversarial_split = use_era_adversarial_split
+        self.era_adversarial_beta = era_adversarial_beta
         self.verbose = verbose
         self.random_state = random_state
 
@@ -226,9 +254,16 @@ class BoostingEngine:
         if X_val_binned is not None:
             val_predictions = np.full(len(y_val), self.base_score_, dtype=np.float64)
 
-        # GOSS サンプラー
+        # GOSS / TW-GOSS サンプラー (互いに排他)
         goss = None
-        if self.use_goss:
+        tw_goss = None
+        if self.use_tw_goss and era_indices is not None:
+            tw_goss = TemporallyWeightedGOSSSampler(
+                top_rate=self.goss_top_rate,
+                other_rate=self.goss_other_rate,
+                temporal_decay=self.tw_goss_decay,
+                random_state=self.random_state)
+        elif self.use_goss:
             goss = GOSSSampler(self.goss_top_rate, self.goss_other_rate)
 
         # 適応的正則化器
@@ -246,10 +281,15 @@ class BoostingEngine:
                 tau=self.gradient_clip_tau,
                 eta=self.gradient_noise_eta)
 
-        # DART マネージャー
+        # DART / Era-aware DART マネージャー
         dart_mgr = None
         dart_tree_data = []  # (ツリー, 列インデックス, X_binned 参照)
-        if self.use_dart:
+        if self.use_era_aware_dart and era_indices is not None:
+            dart_mgr = EraAwareDARTManager(
+                drop_rate=self.dart_drop_rate,
+                skip_drop=self.dart_skip_drop,
+                era_var_scale=self.era_dart_var_scale)
+        elif self.use_dart:
             dart_mgr = DARTManager(
                 drop_rate=self.dart_drop_rate,
                 skip_drop=self.dart_skip_drop)
@@ -295,6 +335,39 @@ class BoostingEngine:
                 'X_std':      X_ep.std(axis=0) + 1e-9,
                 'lambda':     self.feature_exposure_lambda,
             }
+
+        # Era adaptive gradient clipper
+        era_clipper = None
+        if self.use_era_gradient_clipping:
+            era_clipper = EraAdaptiveGradientClipper(
+                clip_multiplier=self.era_clip_multiplier)
+
+        # Sharpe-ratio early stopping state
+        best_sr = float('-inf')
+        sr_patience_counter = 0
+
+        # Sharpe-ratio tree regularization helper
+        def _era_spearman_sharpe(tree_pred, targets, eras):
+            """Compute Sharpe ratio of per-era Spearman correlations."""
+            from penguinboost.core.era_boost import _spearman_corr
+            labels = np.unique(eras)
+            corrs = []
+            for era in labels:
+                mask = eras == era
+                if mask.sum() < 2:
+                    continue
+                corrs.append(_spearman_corr(tree_pred[mask], targets[mask]))
+            if len(corrs) < 2:
+                return 0.0
+            arr = np.array(corrs)
+            return float(arr.mean() / (arr.std() + 1e-9))
+
+        # Era-adversarial split: precompute integer era IDs (once, before loop)
+        _era_int_ids = None
+        _n_eras = 0
+        if self.use_era_adversarial_split and era_indices_arr is not None:
+            _era_int_ids = _era_to_int(era_indices_arr)
+            _n_eras = int(_era_int_ids.max()) + 1
 
         # エラ条件付き目的関数に era_indices を設定
         if era_indices is not None and hasattr(objective, 'set_era_indices'):
@@ -351,6 +424,10 @@ class BoostingEngine:
                 quadratic = P_c * float(corr @ corr) / (n * std_P**2)
                 gradients = gradients + 2.0 * lam * (linear - quadratic)
 
+            # Era adaptive gradient clipping (per-era MAD)
+            if era_clipper is not None and era_indices_arr is not None:
+                gradients = era_clipper.clip(gradients, era_indices_arr)
+
             # 直交勾配射影
             if orth_projector is not None:
                 gradients = orth_projector.project(gradients)
@@ -359,10 +436,26 @@ class BoostingEngine:
             if perturber is not None:
                 gradients = perturber.perturb(gradients, rng)
 
-            # GOSS サンプリング
+            # Multi-target iteration update
+            if hasattr(objective, 'set_iteration'):
+                objective.set_iteration(iteration)
+
+            # GOSS / TW-GOSS サンプリング
             sample_indices = np.arange(n_samples)
 
-            if goss is not None:
+            if tw_goss is not None and era_indices_arr is not None:
+                # TW-GOSS: combine gradient magnitude with temporal recency
+                # Use era IDs as ordinal time index
+                era_int = _era_to_int(era_indices_arr)
+                tw_indices, tw_weights = tw_goss.sample(gradients, era_int)
+                weighted_gradients = gradients.copy()
+                weighted_hessians = hessians.copy()
+                weight_map = np.ones(n_samples)
+                weight_map[tw_indices] = tw_weights
+                weighted_gradients *= weight_map
+                weighted_hessians *= weight_map
+                sample_indices = tw_indices
+            elif goss is not None:
                 goss_indices, goss_weights = goss.sample(gradients)
                 weighted_gradients = gradients.copy()
                 weighted_hessians = hessians.copy()
@@ -414,6 +507,15 @@ class BoostingEngine:
                 X_tree = X_binned
                 col_indices = None
 
+            # Era-adversarial split data (uses precomputed IDs from before loop)
+            era_adv_data = None
+            if _era_int_ids is not None:
+                era_adv_data = {
+                    'era_ids': _era_int_ids,
+                    'n_eras': _n_eras,
+                    'beta': self.era_adversarial_beta,
+                }
+
             # ツリーを構築
             tree = DecisionTree(
                 max_depth=self.max_depth,
@@ -429,6 +531,7 @@ class BoostingEngine:
                 monotone_checker=monotone_checker,
                 iteration=iteration,
                 total_iterations=self.n_estimators,
+                era_adversarial_data=era_adv_data,
             )
             tree.build(X_tree, weighted_gradients, weighted_hessians)
 
@@ -440,6 +543,20 @@ class BoostingEngine:
                 tree_pred = tree.predict(X_binned[:, col_indices])
             else:
                 tree_pred = tree.predict(X_binned)
+
+            # Era-aware DART: record era-variance for this tree
+            if isinstance(dart_mgr, EraAwareDARTManager) and era_indices_arr is not None:
+                dart_mgr.record_tree_era_variance(tree_pred, y_1d, era_indices_arr)
+
+            # Sharpe-ratio tree regularization (design doc D):
+            # Scale down trees whose per-era Spearman Sharpe is below threshold
+            if (self.use_sharpe_tree_reg
+                    and era_indices_arr is not None
+                    and len(np.unique(era_indices_arr)) >= 2):
+                tree_sr = _era_spearman_sharpe(tree_pred, y_1d, era_indices_arr)
+                if tree_sr < self.sharpe_reg_threshold and tree_sr >= 0:
+                    sr_scale = max(0.0, tree_sr / self.sharpe_reg_threshold)
+                    tree_pred = tree_pred * sr_scale
 
             # DART スケーリング
             lr = self.learning_rate
@@ -487,6 +604,27 @@ class BoostingEngine:
                 if self.verbose >= 1 and iteration % 10 == 0:
                     print(f"[{iteration}] train_loss={train_loss:.6f}")
                 self.best_iteration_ = iteration
+
+            # Sharpe-ratio early stopping (design doc M):
+            # Uses era-wise Spearman Sharpe on *training* data as the stopping
+            # criterion.  Requires era_indices; eval_set is not needed.
+            if (self.use_sharpe_early_stopping
+                    and era_indices_arr is not None
+                    and len(np.unique(era_indices_arr)) >= 2):
+                sr = _era_spearman_sharpe(predictions, y_1d, era_indices_arr)
+                if sr > best_sr:
+                    best_sr = sr
+                    self.best_iteration_ = iteration
+                    sr_patience_counter = 0
+                else:
+                    sr_patience_counter += 1
+                if self.verbose >= 1 and iteration % 10 == 0:
+                    print(f"[{iteration}] era_sharpe={sr:.4f}")
+                if sr_patience_counter >= self.sharpe_es_patience:
+                    if self.verbose >= 1:
+                        print(f"Sharpe early stopping at iteration {iteration} "
+                              f"(best SR={best_sr:.4f})")
+                    break
 
         # C++ 予測用にツリーを平坦配列にシリアライズ
         self._cpp_trees = self._serialize_trees() if _HAS_CPP else None

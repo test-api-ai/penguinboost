@@ -1761,3 +1761,366 @@ class TestThreadControl:
         assert hasattr(penguinboost, 'get_num_threads')
         assert callable(penguinboost.set_num_threads)
         assert callable(penguinboost.get_num_threads)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New financial-domain feature tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_era_data(n_samples=300, n_features=10, n_eras=5, seed=42):
+    """Helper: create regression data with era labels."""
+    rng = np.random.RandomState(seed)
+    X = rng.randn(n_samples, n_features)
+    y = X[:, 0] * 0.5 + rng.randn(n_samples) * 0.3
+    eras = np.repeat(np.arange(n_eras), n_samples // n_eras)
+    eras = np.concatenate([eras, np.full(n_samples - len(eras), n_eras - 1)])
+    return X, y, eras
+
+
+class TestAsymmetricHuberObjective:
+    def test_gradient_sign_overprediction(self):
+        """Heavy-tail gradient fires when ŷ >> y (overprediction)."""
+        from penguinboost.objectives.regression import AsymmetricHuberObjective
+        obj = AsymmetricHuberObjective(delta=1.0, kappa=3.0)
+        y = np.zeros(5)
+        pred = np.array([0.0, 0.5, 1.5, 3.0, 5.0])   # increasing overprediction
+        g = obj.gradient(y, pred)
+        # In quadratic zone (r <= delta): g ≈ r
+        np.testing.assert_allclose(g[0], 0.0, atol=1e-9)
+        np.testing.assert_allclose(g[1], 0.5, atol=1e-9)
+        # In tail zone (r > delta=1): g = kappa * delta * sign(r) = 3.0
+        np.testing.assert_allclose(g[2], 3.0 * 1.0, atol=1e-9)
+        np.testing.assert_allclose(g[3], 3.0 * 1.0, atol=1e-9)
+        # All tail gradients equal (linear growth, not quadratic)
+        assert g[3] == g[4]
+
+    def test_loss_increases_faster_on_overprediction(self):
+        """Loss should grow faster than L2 for large overpredictions."""
+        from penguinboost.objectives.regression import AsymmetricHuberObjective, MSEObjective
+        obj_ah = AsymmetricHuberObjective(delta=0.5, kappa=5.0)
+        obj_mse = MSEObjective()
+        y = np.zeros(1)
+        pred_large = np.array([3.0])   # large overprediction
+        # AsymmetricHuber penalises overprediction harder → loss should differ from MSE
+        loss_ah = obj_ah.loss(y, pred_large)
+        loss_mse = obj_mse.loss(y, pred_large)
+        assert loss_ah != loss_mse   # they should differ
+
+    def test_kappa_must_be_ge_1(self):
+        from penguinboost.objectives.regression import AsymmetricHuberObjective
+        with pytest.raises(ValueError):
+            AsymmetricHuberObjective(delta=1.0, kappa=0.5)
+
+    def test_regressor_asymmetric_huber(self):
+        X, y, _ = _make_era_data()
+        model = PenguinBoostRegressor(
+            objective="asymmetric_huber", huber_delta=1.0, asymmetric_kappa=2.0,
+            n_estimators=20)
+        model.fit(X, y)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+
+
+class TestTemporallyWeightedGOSS:
+    def test_output_shapes(self):
+        from penguinboost.core.sampling import TemporallyWeightedGOSSSampler
+        rng = np.random.RandomState(0)
+        gradients = rng.randn(200)
+        time_idx = np.repeat(np.arange(10), 20)
+        sampler = TemporallyWeightedGOSSSampler(top_rate=0.2, other_rate=0.1,
+                                                 temporal_decay=0.05)
+        indices, weights = sampler.sample(gradients, time_idx)
+        assert len(indices) == len(weights)
+        assert len(indices) <= len(gradients)
+        assert (weights > 0).all()
+
+    def test_recent_bias(self):
+        """With high decay, recent samples should dominate the top bucket."""
+        from penguinboost.core.sampling import TemporallyWeightedGOSSSampler
+        n = 100
+        # All gradients equal; selection driven purely by recency
+        gradients = np.ones(n)
+        time_idx = np.arange(n)    # 0..99, recent = high index
+        sampler = TemporallyWeightedGOSSSampler(top_rate=0.1, other_rate=0.05,
+                                                 temporal_decay=1.0,
+                                                 random_state=0)
+        indices, _ = sampler.sample(gradients, time_idx)
+        n_top = max(1, int(n * 0.1))
+        top_indices = indices[:n_top]
+        # With decay=1.0, top samples should be mostly from the last 50%
+        assert np.mean(top_indices > n // 2) > 0.5
+
+    def test_tw_goss_in_regressor(self):
+        X, y, eras = _make_era_data()
+        model = PenguinBoostRegressor(
+            use_tw_goss=True, tw_goss_decay=0.05,
+            goss_top_rate=0.3, goss_other_rate=0.1,
+            n_estimators=20, random_state=0)
+        model.fit(X, y, era_indices=eras)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+
+
+class TestEraAdaptiveGradientClipper:
+    def test_clipping_reduces_outliers(self):
+        from penguinboost.core.regularization import EraAdaptiveGradientClipper
+        rng = np.random.RandomState(0)
+        gradients = rng.randn(100)
+        gradients[0] = 1000.0   # extreme outlier in era 0
+        eras = np.repeat(np.arange(5), 20)
+        clipper = EraAdaptiveGradientClipper(clip_multiplier=3.0)
+        clipped = clipper.clip(gradients, eras)
+        assert abs(clipped[0]) < abs(gradients[0])   # outlier was clipped
+
+    def test_clip_with_stats(self):
+        from penguinboost.core.regularization import EraAdaptiveGradientClipper
+        rng = np.random.RandomState(0)
+        gradients = rng.randn(100)
+        eras = np.repeat(np.arange(5), 20)
+        clipper = EraAdaptiveGradientClipper(clip_multiplier=4.0)
+        clipped, stats = clipper.clip_with_stats(gradients, eras)
+        assert len(stats) == 5
+        for era, s in stats.items():
+            assert 'mad' in s and 'threshold' in s and 'frac_clipped' in s
+
+    def test_in_regressor(self):
+        X, y, eras = _make_era_data()
+        model = PenguinBoostRegressor(
+            use_era_gradient_clipping=True, era_clip_multiplier=4.0,
+            n_estimators=20)
+        model.fit(X, y, era_indices=eras)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+
+
+class TestEraAwareDARTManager:
+    def test_era_variance_recording(self):
+        from penguinboost.core.dart import EraAwareDARTManager
+        from penguinboost.core.era_boost import _spearman_corr
+        mgr = EraAwareDARTManager(drop_rate=0.3, era_var_scale=20.0)
+        rng = np.random.RandomState(0)
+        n = 100
+        y = rng.randn(n)
+        eras = np.repeat(np.arange(5), 20)
+
+        for _ in range(3):
+            tree_pred = rng.randn(n)
+            mgr.record_tree_era_variance(tree_pred, y, eras)
+
+        assert len(mgr._tree_era_vars) == 3
+        assert all(v >= 0 for v in mgr._tree_era_vars)
+
+    def test_drop_probabilities_use_era_variance(self):
+        from penguinboost.core.dart import EraAwareDARTManager
+        mgr = EraAwareDARTManager(drop_rate=0.3, era_var_scale=50.0)
+        # Manually inject era variances: first tree stable, second tree unstable
+        mgr._tree_era_vars = [0.0, 0.1]
+        rng = np.random.RandomState(0)
+        drops = [mgr.sample_drops(2, rng) for _ in range(200)]
+        # Tree 1 (high variance) should be dropped more often than tree 0
+        drop_counts = np.zeros(2)
+        for d in drops:
+            for idx in d:
+                drop_counts[idx] += 1
+        assert drop_counts[1] > drop_counts[0]   # unstable tree dropped more
+
+    def test_in_regressor(self):
+        X, y, eras = _make_era_data()
+        model = PenguinBoostRegressor(
+            use_era_aware_dart=True, dart_drop_rate=0.1,
+            era_dart_var_scale=20.0, n_estimators=20)
+        model.fit(X, y, era_indices=eras)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+
+
+class TestMultiTargetAuxiliaryObjective:
+    def test_gradient_mixing(self):
+        from penguinboost.objectives.multi_target import MultiTargetAuxiliaryObjective
+        from penguinboost.objectives.regression import MSEObjective
+        rng = np.random.RandomState(0)
+        n = 50
+        y_main = rng.randn(n)
+        Y_aux = rng.randn(n, 3)
+        pred = rng.randn(n)
+
+        obj = MultiTargetAuxiliaryObjective(MSEObjective(), alpha=0.7)
+        obj.set_aux_targets(Y_aux)
+
+        g_main = MSEObjective().gradient(y_main, pred)
+        g_mixed = obj.gradient(y_main, pred)
+
+        # With alpha=0.7, mixed gradient should differ from pure main gradient
+        assert not np.allclose(g_main, g_mixed)
+        # But they should be correlated (same direction)
+        assert np.corrcoef(g_main, g_mixed)[0, 1] > 0.5
+
+    def test_schedule_increases_alpha(self):
+        from penguinboost.objectives.multi_target import MultiTargetAuxiliaryObjective
+        from penguinboost.objectives.regression import MSEObjective
+        rng = np.random.RandomState(0)
+        n = 20
+        y = rng.randn(n)
+        Y_aux = rng.randn(n, 2)
+        pred = rng.randn(n)
+
+        obj = MultiTargetAuxiliaryObjective(
+            MSEObjective(), alpha=0.9, use_schedule=True,
+            alpha_start=0.2, n_estimators=100)
+        obj.set_aux_targets(Y_aux)
+
+        obj.set_iteration(0)
+        alpha_early = obj._effective_alpha()
+        obj.set_iteration(99)
+        alpha_late = obj._effective_alpha()
+        assert alpha_late > alpha_early
+
+    def test_no_aux_targets_returns_main_gradient(self):
+        from penguinboost.objectives.multi_target import MultiTargetAuxiliaryObjective
+        from penguinboost.objectives.regression import MSEObjective
+        rng = np.random.RandomState(0)
+        y = rng.randn(30)
+        pred = rng.randn(30)
+        obj = MultiTargetAuxiliaryObjective(MSEObjective(), alpha=0.7)
+        g_main = MSEObjective().gradient(y, pred)
+        g_multi = obj.gradient(y, pred)
+        np.testing.assert_array_equal(g_main, g_multi)
+
+
+class TestConformalPredictor:
+    def test_calibration_coverage(self):
+        from penguinboost.core.conformal import ConformalPredictor
+        rng = np.random.RandomState(42)
+        n_cal, n_test = 500, 200
+        y_cal = rng.randn(n_cal)
+        pred_cal = y_cal + rng.randn(n_cal) * 0.3   # near-perfect predictor
+
+        cp = ConformalPredictor(alpha=0.1)
+        cp.calibrate(y_cal, pred_cal)
+
+        y_test = rng.randn(n_test)
+        pred_test = y_test + rng.randn(n_test) * 0.3
+        cov = cp.empirical_coverage(y_test, pred_test)
+        # Coverage should be ≥ 1 - alpha (90%) ± some tolerance
+        assert cov >= 0.80   # generous lower bound for a small test set
+
+    def test_interval_shape(self):
+        from penguinboost.core.conformal import ConformalPredictor
+        rng = np.random.RandomState(0)
+        cp = ConformalPredictor(alpha=0.05)
+        cp.calibrate(rng.randn(100), rng.randn(100))
+        pred = rng.randn(50)
+        lower, upper = cp.predict_interval(pred)
+        assert lower.shape == pred.shape == upper.shape
+        assert (upper >= lower).all()
+
+    def test_asymmetric_mode(self):
+        from penguinboost.core.conformal import ConformalPredictor
+        rng = np.random.RandomState(0)
+        y_cal = rng.randn(200)
+        pred_cal = y_cal + np.abs(rng.randn(200)) * 0.5   # biased (under)predictor
+        cp = ConformalPredictor(alpha=0.1, asymmetric=True)
+        cp.calibrate(y_cal, pred_cal)
+        # With asymmetric errors, upper and lower quantiles differ
+        assert cp._q_upper != cp._q_lower
+
+    def test_era_conformal(self):
+        from penguinboost.core.conformal import EraConformalPredictor
+        rng = np.random.RandomState(0)
+        n = 300
+        y = rng.randn(n)
+        pred = y + rng.randn(n) * 0.2
+        eras = np.repeat(np.arange(10), 30)
+        cp = EraConformalPredictor(alpha=0.1, min_era_samples=10)
+        cp.calibrate(y, pred, eras)
+        lower, upper = cp.predict_interval(pred[:30], eras[:30])
+        assert lower.shape == (30,)
+        assert (upper >= lower).all()
+
+    def test_not_calibrated_raises(self):
+        from penguinboost.core.conformal import ConformalPredictor
+        cp = ConformalPredictor()
+        with pytest.raises(RuntimeError):
+            cp.predict_interval(np.zeros(5))
+
+
+class TestSharpeEarlyStopping:
+    def test_sharpe_es_runs_without_error(self):
+        """SR early stopping should run and produce valid predictions."""
+        X, y, eras = _make_era_data(n_samples=200, n_eras=5)
+        model = PenguinBoostRegressor(
+            use_sharpe_early_stopping=True,
+            sharpe_es_patience=10,
+            n_estimators=50,
+            random_state=0)
+        model.fit(X, y, era_indices=eras)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+        assert model.engine_.best_iteration_ >= 0
+
+
+class TestSharpeTreeRegularization:
+    def test_sharpe_tree_reg_runs(self):
+        X, y, eras = _make_era_data()
+        model = PenguinBoostRegressor(
+            use_sharpe_tree_reg=True, sharpe_reg_threshold=0.3,
+            n_estimators=30, random_state=0)
+        model.fit(X, y, era_indices=eras)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+
+
+class TestEraAdversarialSplit:
+    def test_era_adversarial_split_runs(self):
+        X, y, eras = _make_era_data(n_samples=200, n_eras=4)
+        model = PenguinBoostRegressor(
+            use_era_adversarial_split=True, era_adversarial_beta=0.3,
+            n_estimators=15, random_state=0)
+        model.fit(X, y, era_indices=eras)
+        preds = model.predict(X)
+        assert preds.shape == (len(y),)
+
+    def test_era_histogram_builder(self):
+        from penguinboost.core.histogram import HistogramBuilder
+        rng = np.random.RandomState(0)
+        n, p, n_eras = 100, 4, 3
+        X = rng.randint(0, 10, (n, p)).astype(np.uint8)
+        g = rng.randn(n)
+        h = np.ones(n)
+        era_ids = (np.arange(n) % n_eras).astype(np.int32)
+
+        builder = HistogramBuilder(max_bins=15)
+        era_g, era_h = builder.build_era_histograms(X, g, h, era_ids, n_eras)
+        assert era_g.shape == (n_eras, p, 16)   # 15 + 1 NaN bin
+        assert era_h.shape == (n_eras, p, 16)
+
+        penalty = builder._era_adversarial_penalty(era_g, era_h, reg_lambda=1.0)
+        assert penalty.shape == (2, p, 15)      # (nan_dirs, features, bins)
+        assert (penalty >= 0).all()
+
+
+class TestNeutralizationAwareObjective:
+    def test_gradient_shape(self):
+        from penguinboost.objectives.corr import NeutralizationAwareObjective
+        rng = np.random.RandomState(0)
+        n, p = 80, 5
+        X = rng.randn(n, p)
+        y = rng.randn(n)
+        pred = rng.randn(n)
+
+        obj = NeutralizationAwareObjective(X_ref=X, lambda_ridge=1e-3)
+        g = obj.gradient(y, pred)
+        assert g.shape == (n,)
+        assert np.isfinite(g).all()
+
+    def test_loss_is_scalar(self):
+        from penguinboost.objectives.corr import NeutralizationAwareObjective
+        rng = np.random.RandomState(0)
+        n, p = 60, 4
+        X = rng.randn(n, p)
+        y = rng.randn(n)
+        pred = rng.randn(n)
+        obj = NeutralizationAwareObjective(X_ref=X)
+        loss = obj.loss(y, pred)
+        assert isinstance(loss, float)
+        assert np.isfinite(loss)

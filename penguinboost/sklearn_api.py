@@ -9,6 +9,8 @@ from penguinboost.objectives.classification import BinaryLoglossObjective, Softm
 from penguinboost.objectives.ranking import LambdaRankObjective
 from penguinboost.objectives.survival import CoxObjective
 from penguinboost.objectives.quantile import QuantileObjective, CVaRObjective
+from penguinboost.objectives.regression import AsymmetricHuberObjective
+from penguinboost.objectives.multi_target import MultiTargetAuxiliaryObjective
 from penguinboost.metrics.metrics import rmse, logloss
 from penguinboost.utils import check_array, check_target
 
@@ -38,6 +40,12 @@ class _PenguinBoostBase(BaseEstimator):
                  era_boosting_method='hard_era', era_boosting_temp=1.0,
                  use_feature_exposure_penalty=False,
                  feature_exposure_lambda=0.1, exposure_penalty_features=None,
+                 use_tw_goss=False, tw_goss_decay=0.01,
+                 use_era_gradient_clipping=False, era_clip_multiplier=4.0,
+                 use_era_aware_dart=False, era_dart_var_scale=20.0,
+                 use_sharpe_early_stopping=False, sharpe_es_patience=50,
+                 use_sharpe_tree_reg=False, sharpe_reg_threshold=0.5,
+                 use_era_adversarial_split=False, era_adversarial_beta=0.3,
                  verbose=0, random_state=None):
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -84,6 +92,18 @@ class _PenguinBoostBase(BaseEstimator):
         self.use_feature_exposure_penalty = use_feature_exposure_penalty
         self.feature_exposure_lambda = feature_exposure_lambda
         self.exposure_penalty_features = exposure_penalty_features
+        self.use_tw_goss = use_tw_goss
+        self.tw_goss_decay = tw_goss_decay
+        self.use_era_gradient_clipping = use_era_gradient_clipping
+        self.era_clip_multiplier = era_clip_multiplier
+        self.use_era_aware_dart = use_era_aware_dart
+        self.era_dart_var_scale = era_dart_var_scale
+        self.use_sharpe_early_stopping = use_sharpe_early_stopping
+        self.sharpe_es_patience = sharpe_es_patience
+        self.use_sharpe_tree_reg = use_sharpe_tree_reg
+        self.sharpe_reg_threshold = sharpe_reg_threshold
+        self.use_era_adversarial_split = use_era_adversarial_split
+        self.era_adversarial_beta = era_adversarial_beta
         self.verbose = verbose
         self.random_state = random_state
 
@@ -133,6 +153,18 @@ class _PenguinBoostBase(BaseEstimator):
             use_feature_exposure_penalty=self.use_feature_exposure_penalty,
             feature_exposure_lambda=self.feature_exposure_lambda,
             exposure_penalty_features=self.exposure_penalty_features,
+            use_tw_goss=self.use_tw_goss,
+            tw_goss_decay=self.tw_goss_decay,
+            use_era_gradient_clipping=self.use_era_gradient_clipping,
+            era_clip_multiplier=self.era_clip_multiplier,
+            use_era_aware_dart=self.use_era_aware_dart,
+            era_dart_var_scale=self.era_dart_var_scale,
+            use_sharpe_early_stopping=self.use_sharpe_early_stopping,
+            sharpe_es_patience=self.sharpe_es_patience,
+            use_sharpe_tree_reg=self.use_sharpe_tree_reg,
+            sharpe_reg_threshold=self.sharpe_reg_threshold,
+            use_era_adversarial_split=self.use_era_adversarial_split,
+            era_adversarial_beta=self.era_adversarial_beta,
             verbose=self.verbose,
             random_state=self.random_state,
         )
@@ -155,7 +187,7 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
     その他のパラメータは _PenguinBoostBase を参照。
     """
 
-    def __init__(self, objective="mse", huber_delta=1.0,
+    def __init__(self, objective="mse", huber_delta=1.0, asymmetric_kappa=2.0,
                  n_estimators=100, learning_rate=0.1, max_depth=6,
                  max_leaves=31, growth="leafwise", reg_lambda=1.0,
                  reg_alpha=0.0, min_child_weight=1.0, min_child_samples=1,
@@ -178,6 +210,12 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
                  era_boosting_method='hard_era', era_boosting_temp=1.0,
                  use_feature_exposure_penalty=False,
                  feature_exposure_lambda=0.1, exposure_penalty_features=None,
+                 use_tw_goss=False, tw_goss_decay=0.01,
+                 use_era_gradient_clipping=False, era_clip_multiplier=4.0,
+                 use_era_aware_dart=False, era_dart_var_scale=20.0,
+                 use_sharpe_early_stopping=False, sharpe_es_patience=50,
+                 use_sharpe_tree_reg=False, sharpe_reg_threshold=0.5,
+                 use_era_adversarial_split=False, era_adversarial_beta=0.3,
                  verbose=0, random_state=None):
         super().__init__(
             n_estimators=n_estimators, learning_rate=learning_rate,
@@ -207,9 +245,21 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
             use_feature_exposure_penalty=use_feature_exposure_penalty,
             feature_exposure_lambda=feature_exposure_lambda,
             exposure_penalty_features=exposure_penalty_features,
+            use_tw_goss=use_tw_goss, tw_goss_decay=tw_goss_decay,
+            use_era_gradient_clipping=use_era_gradient_clipping,
+            era_clip_multiplier=era_clip_multiplier,
+            use_era_aware_dart=use_era_aware_dart,
+            era_dart_var_scale=era_dart_var_scale,
+            use_sharpe_early_stopping=use_sharpe_early_stopping,
+            sharpe_es_patience=sharpe_es_patience,
+            use_sharpe_tree_reg=use_sharpe_tree_reg,
+            sharpe_reg_threshold=sharpe_reg_threshold,
+            use_era_adversarial_split=use_era_adversarial_split,
+            era_adversarial_beta=era_adversarial_beta,
             verbose=verbose, random_state=random_state)
         self.objective = objective
         self.huber_delta = huber_delta
+        self.asymmetric_kappa = asymmetric_kappa
 
     def fit(self, X, y, eval_set=None, era_indices=None):
         """回帰器を学習する。
@@ -234,6 +284,8 @@ class PenguinBoostRegressor(_PenguinBoostBase, RegressorMixin):
             "mse": MSEObjective,
             "mae": MAEObjective,
             "huber": lambda: HuberObjective(delta=self.huber_delta),
+            "asymmetric_huber": lambda: AsymmetricHuberObjective(
+                delta=self.huber_delta, kappa=self.asymmetric_kappa),
         }
         obj_cls = obj_map[self.objective]
         obj = obj_cls() if callable(obj_cls) else obj_cls()

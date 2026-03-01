@@ -1,4 +1,5 @@
 LICENSE
+MANIFEST.in
 NOTICE
 README.md
 pyproject.toml
@@ -15,6 +16,7 @@ penguinboost/core/__init__.py
 penguinboost/core/binning.py
 penguinboost/core/boosting.py
 penguinboost/core/categorical.py
+penguinboost/core/conformal.py
 penguinboost/core/dart.py
 penguinboost/core/era_boost.py
 penguinboost/core/financial.py
@@ -30,10 +32,10 @@ penguinboost/metrics/metrics.py
 penguinboost/objectives/__init__.py
 penguinboost/objectives/classification.py
 penguinboost/objectives/corr.py
+penguinboost/objectives/multi_target.py
 penguinboost/objectives/quantile.py
 penguinboost/objectives/ranking.py
 penguinboost/objectives/regression.py
 penguinboost/objectives/survival.py
-tests/__init__.py
 tests/bench_vs_lightgbm.py
 tests/test_penguinboost.py

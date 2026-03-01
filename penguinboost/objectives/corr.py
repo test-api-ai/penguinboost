@@ -309,3 +309,108 @@ class FeatureExposurePenalizedObjective:
         std_P = pred.std() + 1e-9
         P_centered = pred - pred.mean()
         return (self._X_centered.T @ P_centered) / (n * std_P * self._X_std)
+
+
+# ── Neutralization-aware Loss (design doc K) ──────────────────────────────────
+
+class NeutralizationAwareObjective:
+    """Objective that maximises Spearman correlation of *neutralised* predictions.
+
+    Numerai evaluates submissions on their neutralized correlation (FNC):
+
+        FNC = corr(ŷ_neutral, y)
+
+    where ŷ_neutral = ŷ - X β  and  β = (X^TX + λI)^{-1} X^T ŷ.
+
+    Training directly on FNC ties the learning objective to the evaluation
+    metric and structurally discourages feature-level linear exposures.
+
+    Mathematical gradient derivation
+    ---------------------------------
+    Let H_X = X (X^TX + λI)^{-1} X^T (hat matrix) and P = I - H_X.
+
+        ŷ_neutral = P ŷ    (P is symmetric and idempotent: P² = P, P^T = P)
+
+    The gradient of corr(P ŷ, y) w.r.t. ŷ (chain rule through P):
+
+        ∂ corr(P ŷ, y) / ∂ ŷ_i = Σ_k P_{ki} · [∂ corr / ∂ (Pŷ)_k]
+                                 = P^T · ∇_{Pŷ} corr(Pŷ, y)
+                                 = P · ∇_{Pŷ} corr(Pŷ, y)
+
+    We approximate the inner gradient using rank-normalised targets
+    (SpearmanObjective approach applied to ŷ_neutral within each era).
+
+    Parameters
+    ----------
+    X_ref : np.ndarray of shape (n_samples, n_features)
+        Feature matrix used to compute the neutralisation projection.
+    lambda_ridge : float
+        Ridge regularisation for (X^TX + λI)^{-1}. Stabilises neutralisation
+        when features are correlated.
+    features : list of int or None
+        Subset of feature indices to neutralise against. None = all.
+    corr_eps : float
+        Small constant for numerical stability.
+    """
+
+    def __init__(self, X_ref, lambda_ridge=1e-4, features=None, corr_eps=1e-9):
+        self.lambda_ridge = lambda_ridge
+        self.features = features
+        self.corr_eps = corr_eps
+        self._eras = None
+        self._era_labels = None
+
+        # Pre-compute projection matrix P = I - H_X
+        X_sub = X_ref[:, features] if features is not None else X_ref
+        n, p = X_sub.shape
+        XtX = X_sub.T @ X_sub + lambda_ridge * np.eye(p)
+        self._P = np.eye(n) - X_sub @ np.linalg.solve(XtX, X_sub.T)
+
+    def set_era_indices(self, eras):
+        """Set era labels for era-conditional Spearman gradient."""
+        self._eras = np.asarray(eras)
+        self._era_labels = np.unique(self._eras)
+
+    def init_score(self, y):
+        return float(_rank_normalize(y).mean())
+
+    def gradient(self, y, pred):
+        """Gradient of -corr(P·ŷ, y) w.r.t. ŷ (negated since we minimise)."""
+        # Neutralise current predictions
+        y_neutral = self._P @ pred
+
+        # Compute Spearman gradient w.r.t. the neutralised predictions
+        if self._eras is not None:
+            g_neutral = self._spearman_era_gradient(y, y_neutral)
+        else:
+            r = _rank_normalize(y)
+            g_neutral = y_neutral - r
+
+        # Project back through P: ∂L/∂ŷ = P^T · g_neutral = P · g_neutral
+        return self._P @ g_neutral
+
+    def _spearman_era_gradient(self, y, y_neutral):
+        """Per-era rank-correlation gradient w.r.t. y_neutral."""
+        n = len(y)
+        g = np.zeros(n, dtype=np.float64)
+        for era in self._era_labels:
+            mask = self._eras == era
+            if mask.sum() < 2:
+                continue
+            r_e = _rank_normalize(y[mask])
+            g[mask] = y_neutral[mask] - r_e
+        return g
+
+    def hessian(self, y, pred):
+        return np.ones(len(y), dtype=np.float64)
+
+    def loss(self, y, pred):
+        """Negative Spearman corr of neutralised predictions (lower = better)."""
+        y_neutral = self._P @ pred
+        return -float(_spearman_corr_vec(y_neutral, y))
+
+
+def _spearman_corr_vec(x, y):
+    """Spearman rank correlation (vectorised)."""
+    from penguinboost.core.era_boost import _rankdata, _spearman_corr
+    return _spearman_corr(x, y)

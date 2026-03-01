@@ -33,6 +33,12 @@ LightGBM・CatBoost・XGBoost の技術を融合した独自の勾配ブース�
   - [3.12 Era Boosting](#312-era-boosting)
   - [3.13 特徴量露出ペナルティ](#313-特徴量露出ペナルティ)
   - [3.14 制御パラメータ](#314-制御パラメータ)
+  - [3.15 TW-GOSS（時間的重み付きサンプリング）](#315-tw-goss時間的重み付きサンプリング)
+  - [3.16 Era 適応型勾配クリッピング](#316-era-適応型勾配クリッピング)
+  - [3.17 Era 敵対的分割](#317-era-敵対的分割)
+  - [3.18 Era 対応 DART](#318-era-対応-dart)
+  - [3.19 Sharpe 比ベース早期終了](#319-sharpe-比ベース早期終了)
+  - [3.20 Sharpe 木正則化](#320-sharpe-木正則化)
 - [4. API クラスリファレンス](#4-api-クラスリファレンス)
   - [4.1 PenguinBoostRegressor](#41-penguinboostregressor)
   - [4.2 PenguinBoostClassifier](#42-penguinboostclassifier)
@@ -46,6 +52,14 @@ LightGBM・CatBoost・XGBoost の技術を融合した独自の勾配ブース�
   - [4.10 SpearmanObjective](#410-spearmanobjective)
   - [4.11 MaxSharpeEraObjective](#411-maxsharpeeraobjective)
   - [4.12 FeatureExposurePenalizedObjective](#412-featureexposurepenalizedobjective)
+  - [4.13 AsymmetricHuberObjective](#413-asymmetrichuberobject)
+  - [4.14 NeutralizationAwareObjective](#414-neutralizationawareobjective)
+  - [4.15 MultiTargetAuxiliaryObjective](#415-multitargetauxiliaryobjective)
+  - [4.16 ConformalPredictor](#416-conformalpredictor)
+  - [4.17 EraConformalPredictor](#417-eraconformalpredictor)
+  - [4.18 TemporallyWeightedGOSSSampler](#418-temporallyweightedgosssampler)
+  - [4.19 EraAdaptiveGradientClipper](#419-eraadaptivegradientclipper)
+  - [4.20 EraAwareDARTManager](#420-eraawaredartmanager)
 - [5. 詳細ガイド](#5-詳細ガイド)
   - [5.1 ハイブリッド木成長](#51-ハイブリッド木成長symmetric--leaf-wise)
   - [5.2 DART](#52-dartdropout-trees)
@@ -62,6 +76,14 @@ LightGBM・CatBoost・XGBoost の技術を融合した独自の勾配ブース�
   - [6.4 Spearman 目的関数](#64-spearman-目的関数)
   - [6.5 MaxSharpe Era 目的関数](#65-maxsharpe-era-目的関数)
   - [6.6 特徴量露出ペナルティ目的関数](#66-特徴量露出ペナルティ目的関数)
+  - [6.7 TW-GOSS（時間的重み付きサンプリング）](#67-tw-goss時間的重み付きサンプリング)
+  - [6.8 Era 適応型勾配クリッピング](#68-era-適応型勾配クリッピング)
+  - [6.9 Era 敵対的分割基準](#69-era-敵対的分割基準)
+  - [6.10 Era 対応 DART](#610-era-対応-dart)
+  - [6.11 Sharpe 比ベース早期終了・木正則化](#611-sharpe-比ベース早期終了木正則化)
+  - [6.12 マルチターゲット補助学習](#612-マルチターゲット補助学習)
+  - [6.13 共形予測（Conformal Prediction）](#613-共形予測conformal-prediction)
+  - [6.14 中立化対応目的関数](#614-中立化対応目的関数)
 - [7. 金融ユーティリティ](#7-金融ユーティリティ)
   - [7.1 Purged K-Fold CV](#71-purged-k-fold-cv)
   - [7.2 レジーム検出](#72-レジーム検出)
@@ -433,6 +455,68 @@ era（時間期間）ごとの Spearman 相関に基づいてサンプルの重�
 | `verbose` | int | 0 | 出力レベル。0=なし、1=各イテレーション |
 | `random_state` | int/None | None | 乱数シード |
 
+### 3.15 TW-GOSS（時間的重み付きサンプリング）
+
+勾配強度と時間的新鮮度を組み合わせた重み `w_i = |g_i| · exp(-λ(t_max - t_i))` でサンプリングします。`use_tw_goss=True` 時は `goss` より優先されます。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `use_tw_goss` | bool | False | TW-GOSS を有効化 |
+| `tw_goss_decay` | float | 0.01 | 時間減衰率 λ。0=時間非依存（標準 GOSS と同等） |
+
+**注意:** `fit()` に `era_indices` を渡す必要があります。`goss_top_rate` / `goss_other_rate` は共有します。
+
+### 3.16 Era 適応型勾配クリッピング
+
+エラごとに MAD（Median Absolute Deviation）ベースで勾配をクリッピングし、エラ間の勾配スケールを均一化します。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `use_era_gradient_clipping` | bool | False | Era 適応型クリッピングを有効化 |
+| `era_clip_multiplier` | float | 4.0 | クリップ閾値 = `c × MAD_era`。小さいほど外れ値を強く除去 |
+
+### 3.17 Era 敵対的分割
+
+特定エラにのみ有効な分割を抑制するため、エラ間での葉値分散をペナルティとして加算します。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `use_era_adversarial_split` | bool | False | Era 敵対的分割を有効化 |
+| `era_adversarial_beta` | float | 0.05 | エラ間分散ペナルティ強度 β。大きいほど汎化重視 |
+
+**注意:** `fit()` に `era_indices` を渡す必要があります。
+
+### 3.18 Era 対応 DART
+
+木のエラ間パフォーマンス分散に基づいてドロップ確率を動的に決定します。分散が大きい（特定エラ依存的な）木ほど高確率でドロップされます。`use_era_aware_dart=True` 時は `dart` より優先されます。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `use_era_aware_dart` | bool | False | Era 対応 DART を有効化 |
+| `era_dart_var_scale` | float | 20.0 | ドロップ確率のシグモイドスケール s。大きいほど分散の差を強調 |
+
+`drop_rate` / `skip_drop` は通常の DART と共有します。
+
+### 3.19 Sharpe 比ベース早期終了
+
+検証セットのエラ別 Spearman 相関から計算した Sharpe 比が改善しなければ学習を停止します。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `use_sharpe_early_stopping` | bool | False | Sharpe 早期終了を有効化 |
+| `sharpe_es_patience` | int | 30 | 改善なし許容ラウンド数 |
+
+**注意:** `fit()` に `era_indices`、`X_val`、`y_val`、`era_val` を渡す必要があります。
+
+### 3.20 Sharpe 木正則化
+
+各木のエラ Sharpe 比が閾値を下回る場合、その木の寄与をスケールダウンします。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `use_sharpe_tree_reg` | bool | False | Sharpe 木正則化を有効化 |
+| `sharpe_reg_threshold` | float | 0.0 | Sharpe 閾値 θ。この値を下回る木は縮小 |
+
 ---
 
 ## 4. API クラスリファレンス
@@ -447,8 +531,10 @@ from penguinboost import PenguinBoostRegressor
 
 | パラメータ | 型 | デフォルト | 説明 |
 |---|---|---|---|
-| `objective` | str | `"mse"` | 損失関数: `"mse"`, `"mae"`, `"huber"` |
-| `huber_delta` | float | 1.0 | Huber損失のδパラメータ |
+| `objective` | str/obj | `"mse"` | 損失関数: `"mse"`, `"mae"`, `"huber"`, `"spearman"`, `"max_sharpe"`, `"asymmetric_huber"`, またはカスタム目的関数オブジェクト |
+| `huber_delta` | float | 1.0 | Huber 損失の δ パラメータ |
+| `asymmetric_delta` | float | 1.0 | AsymmetricHuber の δ（線形化閾値） |
+| `asymmetric_kappa` | float | 2.0 | AsymmetricHuber の κ ≥ 1（過剰予測ペナルティ倍率） |
 
 **メソッド:**
 
@@ -702,6 +788,218 @@ FeatureExposurePenalizedObjective(
 |---|---|
 | `gradient(y, pred)` | 基底勾配 + 露出ペナルティ勾配 |
 | `feature_exposure(pred)` | 現在の予測の per-feature 露出 |
+
+### 4.13 AsymmetricHuberObjective
+
+```python
+from penguinboost import AsymmetricHuberObjective
+```
+
+残差 `r = ŷ - y` に対して、過剰予測（`r > δ`）に強いペナルティを課す非対称 Huber 損失。
+
+**コンストラクタ:**
+
+```python
+AsymmetricHuberObjective(delta=1.0, kappa=2.0)
+```
+
+| パラメータ | 説明 |
+|---|---|
+| `delta` | 線形化閾値。`r ≤ δ` で二次損失、`r > δ` で線形損失 |
+| `kappa` | 過剰予測ゾーンのペナルティ倍率（≥ 1.0）。`kappa=1` で標準 Huber |
+
+**インターフェース:** `gradient(y, pred)`, `hessian(y, pred)`
+
+```python
+model = PenguinBoostRegressor(
+    objective="asymmetric_huber",
+    asymmetric_delta=1.0,
+    asymmetric_kappa=2.0,
+)
+```
+
+### 4.14 NeutralizationAwareObjective
+
+```python
+from penguinboost import NeutralizationAwareObjective
+```
+
+予測値を特徴量空間に直交射影してから Spearman 相関を最大化します。ハット行列 `H_X = X(X^TX + λI)^{-1}X^T` を用いた正確な多変量中立化。
+
+**コンストラクタ:**
+
+```python
+NeutralizationAwareObjective(X_ref, lambda_ridge=1e-4, features=None, corr_eps=1e-9)
+```
+
+| パラメータ | 説明 |
+|---|---|
+| `X_ref` | 中立化に用いる訓練特徴量行列（`n × p`） |
+| `lambda_ridge` | リッジ正則化強度 λ |
+| `features` | 対象列インデックスのリスト。`None` = 全列 |
+| `corr_eps` | Spearman 計算の数値安定化定数 |
+
+**インターフェース:** `gradient(y, pred)`, `hessian(y, pred)`
+
+### 4.15 MultiTargetAuxiliaryObjective
+
+```python
+from penguinboost import MultiTargetAuxiliaryObjective
+```
+
+メイン目的関数と複数の補助目的関数を混合した勾配 `α·g_main + (1−α)·mean(g_aux)` を出力します。動的スケジュールで学習が進むにつれてメインに集中できます。
+
+**コンストラクタ:**
+
+```python
+MultiTargetAuxiliaryObjective(
+    main_objective,
+    alpha=0.7,
+    use_schedule=False,
+    alpha_start=0.3,
+    n_estimators=100,
+    schedule_power=1.0,
+)
+```
+
+| パラメータ | 説明 |
+|---|---|
+| `main_objective` | メイン目的関数オブジェクト |
+| `alpha` | 固定混合係数（`use_schedule=False` 時） |
+| `use_schedule` | 動的スケジュールを有効化 |
+| `alpha_start` | スケジュール開始時の α（補助重視） |
+| `n_estimators` | スケジュールの総反復数 |
+| `schedule_power` | α 変化の指数。>1 で後半に急増 |
+
+**メソッド:**
+
+| メソッド | 説明 |
+|---|---|
+| `set_aux_targets(Y_aux, aux_objectives=None)` | 補助ターゲット行列と目的関数を設定 |
+| `set_iteration(t)` | 現在の反復番号を設定（スケジュール更新） |
+| `gradient(y, pred)` | 混合勾配を返す |
+| `hessian(y, pred)` | メイン目的関数のヘッシアンを返す |
+
+### 4.16 ConformalPredictor
+
+```python
+from penguinboost import ConformalPredictor
+```
+
+スプリット共形予測法による有効な予測区間を提供します。有限サンプル補正付き分位点で `P(y ∈ [L, U]) ≥ 1 - α` を保証します。
+
+**コンストラクタ:**
+
+```python
+ConformalPredictor(alpha=0.1, asymmetric=False)
+```
+
+| パラメータ | 説明 |
+|---|---|
+| `alpha` | 誤カバレッジ率。`0.1` = 90% カバレッジ目標 |
+| `asymmetric` | `True` で上限・下限を独立に計算 |
+
+**メソッド:**
+
+| メソッド | 説明 |
+|---|---|
+| `calibrate(y_cal, pred_cal)` | キャリブレーションデータでスコア分位点を計算 |
+| `predict_interval(pred)` | `(lower, upper)` を返す。shape=(n,) × 2 |
+| `empirical_coverage(y_test, pred_test)` | 実測カバレッジ率を返す（float） |
+
+### 4.17 EraConformalPredictor
+
+```python
+from penguinboost import EraConformalPredictor
+```
+
+エラごとに独立してキャリブレーションを行う共形予測器。未知エラには全体のキャリブレーションにフォールバック。
+
+**コンストラクタ:**
+
+```python
+EraConformalPredictor(alpha=0.1, min_era_samples=20)
+```
+
+| パラメータ | 説明 |
+|---|---|
+| `alpha` | 誤カバレッジ率 |
+| `min_era_samples` | エラ別キャリブレーションに必要な最小サンプル数 |
+
+**メソッド:**
+
+| メソッド | 説明 |
+|---|---|
+| `calibrate(y_cal, pred_cal, era_cal)` | エラ別キャリブレーション |
+| `predict_interval(pred, era_test)` | エラ別予測区間 `(lower, upper)` |
+
+### 4.18 TemporallyWeightedGOSSSampler
+
+```python
+from penguinboost import TemporallyWeightedGOSSSampler
+```
+
+複合重み `w_i = |g_i| · exp(-λ(t_max - t_i))` でサンプリングする TW-GOSS の低レベル実装。
+
+**コンストラクタ:**
+
+```python
+TemporallyWeightedGOSSSampler(top_rate=0.2, other_rate=0.1, temporal_decay=0.01, random_state=None)
+```
+
+**メソッド:**
+
+| メソッド | 説明 |
+|---|---|
+| `sample(gradients, time_indices)` | 選択インデックスと補正重みの辞書を返す |
+
+### 4.19 EraAdaptiveGradientClipper
+
+```python
+from penguinboost import EraAdaptiveGradientClipper
+```
+
+エラ別 MAD ベースで勾配をクリッピングする低レベル実装。
+
+**コンストラクタ:**
+
+```python
+EraAdaptiveGradientClipper(clip_multiplier=4.0, min_mad=1e-8)
+```
+
+**メソッド:**
+
+| メソッド | 説明 |
+|---|---|
+| `clip(gradients, era_indices)` | クリッピング済み勾配を返す |
+| `clip_with_stats(gradients, era_indices)` | `(g_clipped, stats_dict)` を返す。stats_dict はエラ別 MAD・クリップ率 |
+
+### 4.20 EraAwareDARTManager
+
+```python
+from penguinboost import EraAwareDARTManager
+```
+
+エラ間パフォーマンス分散に基づいてドロップ確率を動的決定する DART マネージャー。
+
+**コンストラクタ:**
+
+```python
+EraAwareDARTManager(drop_rate=0.1, skip_drop=0.0, era_var_scale=20.0)
+```
+
+| パラメータ | 説明 |
+|---|---|
+| `drop_rate` | 基本ドロップ確率（シグモイドの中心値に対応） |
+| `skip_drop` | ドロップ全体をスキップする確率 |
+| `era_var_scale` | シグモイドスケール s。大きいほど分散差を強調 |
+
+**メソッド:**
+
+| メソッド | 説明 |
+|---|---|
+| `record_tree_era_variance(tree_pred, y, era_indices)` | 木のエラ別 Spearman 分散を記録 |
+| `sample_drops(n_trees, rng)` | ドロップする木インデックスの集合を返す |
 
 ---
 
@@ -1132,6 +1430,300 @@ engine.fit(X_train, y_train, obj, era_indices=eras_train)
 | `FeatureExposurePenalizedObjective` | 任意の目的関数にラップ可能 | エンジンレベルの API |
 | `use_feature_exposure_penalty=True` | `PenguinBoostRegressor` パラメータ | sklearn API から簡単に使える |
 
+### 6.7 TW-GOSS（時間的重み付きサンプリング）
+
+標準 GOSS では時間構造を無視しますが、金融データでは最近のエラが将来予測により関連性が高い場合があります。TW-GOSS は勾配強度と時間的新鮮度を組み合わせた重みでサンプリングします。
+
+**重み式:**
+```
+w_i = |g_i| · exp(-λ · (t_max - t_i))
+```
+
+- `|g_i|`: 勾配の絶対値（情報量）
+- `t_i`: サンプルのエラ番号（時間インデックス）
+- `λ`: 時間減衰率（`tw_goss_decay`）
+
+```python
+model = PenguinBoostRegressor(
+    use_tw_goss=True,
+    goss_top_rate=0.2,
+    goss_other_rate=0.1,
+    tw_goss_decay=0.01,   # λ: 小さいほど時間の影響が弱い
+    n_estimators=500,
+)
+model.fit(X_train, y_train, era_indices=era_train)
+```
+
+**`tw_goss_decay` のチューニング:**
+
+| 値 | 効果 |
+|---|---|
+| `0.0` | 標準 GOSS と同等（時間非依存） |
+| `0.01` | 穏やかな時間重み（推奨初期値） |
+| `0.05〜0.1` | 強い時間重み付け（少エラ数・近年データ重視） |
+
+### 6.8 Era 適応型勾配クリッピング
+
+エラ別の MAD（Median Absolute Deviation）でクリッピング閾値を決定します。エラ間で勾配スケールが異なる場合も、各エラに適切なクリッピングが適用されます。
+
+**数学:**
+```
+clip_threshold_e = c · MAD_e + ε
+g_clipped_i = sign(g_i) · min(|g_i|, clip_threshold_{e_i})
+```
+
+```python
+model = PenguinBoostRegressor(
+    use_era_gradient_clipping=True,
+    era_clip_multiplier=4.0,   # c: MAD の何倍でクリップ
+    n_estimators=500,
+)
+model.fit(X_train, y_train, era_indices=era_train)
+
+# 単体で使う場合
+from penguinboost import EraAdaptiveGradientClipper
+
+clipper = EraAdaptiveGradientClipper(clip_multiplier=4.0)
+g_clipped, stats = clipper.clip_with_stats(gradients, era_indices)
+for era_id, info in stats.items():
+    print(f"Era {era_id}: MAD={info['mad']:.4f}, clip_rate={info['clip_fraction']:.2%}")
+```
+
+**MAD vs 標準偏差:** MAD は外れ値に対してロバストで、金融リターンのヘビーテール分布に適しています。
+
+### 6.9 Era 敵対的分割基準
+
+標準の分割ゲイン最大化は特定のエラでのみ有効な分割を選んでしまうことがあります（時代特有パターンへの過学習）。Era 敵対的分割は、エラ間での葉値分散をペナルティとして加えます。
+
+**修正利得:**
+```
+Gain_robust = Gain(k,b) - β · [Var_era(v*_L) + Var_era(v*_R)]
+```
+
+- `Gain(k,b)`: 標準分割利得
+- `v*_L`, `v*_R`: 各エラでの最適葉値
+- `β`: ペナルティ強度（`era_adversarial_beta`）
+
+```python
+model = PenguinBoostRegressor(
+    use_era_adversarial_split=True,
+    era_adversarial_beta=0.05,   # β: 汎化重視なら大きく
+    n_estimators=300,
+)
+model.fit(X_train, y_train, era_indices=era_train)
+```
+
+**β のチューニング:**
+
+| `β` | 効果 |
+|---|---|
+| `0.0` | 通常の分割 |
+| `0.01〜0.05` | 軽〜標準的なエラ依存性の抑制 |
+| `0.1〜0.2` | 強い汎化（精度低下との兼ね合い） |
+
+### 6.10 Era 対応 DART
+
+標準 DART では全木を同確率でドロップしますが、特定エラに特化した木（エラ間分散が大きい木）を優先してドロップするほうが理論的に合理的です。
+
+**ドロップ確率:**
+```
+p_drop(m) = σ(s · (V_m - median(V)))
+```
+
+- `V_m`: 木 m のエラ別 Spearman 相関の分散
+- `median(V)`: 全木の分散の中央値（中心化により確率が 0/1 に分散）
+- `s`: シグモイドスケール（`era_dart_var_scale`）
+
+```python
+model = PenguinBoostRegressor(
+    use_era_aware_dart=True,
+    drop_rate=0.1,
+    era_dart_var_scale=20.0,   # s: 大きいほど分散差を強調
+    n_estimators=500,
+)
+model.fit(X_train, y_train, era_indices=era_train)
+```
+
+**通常 DART との違い:**
+
+| | 標準 DART | Era 対応 DART |
+|---|---|---|
+| ドロップ確率 | 全木固定の `drop_rate` | 木ごとに動的（エラ分散依存） |
+| 効果 | 一般的な過学習抑制 | 特定エラへの特化を優先除去 |
+
+### 6.11 Sharpe 比ベース早期終了・木正則化
+
+**Sharpe 比ベース早期終了:**
+
+検証セットのエラ別 Spearman 相関の Sharpe 比 `SR = mean(ρ_e) / std(ρ_e)` が改善しなければ停止します。損失の改善とは独立して「安定性」を最適化できます。
+
+```python
+model = PenguinBoostRegressor(
+    use_sharpe_early_stopping=True,
+    sharpe_es_patience=30,   # 改善なし許容ラウンド
+    n_estimators=1000,
+)
+model.fit(
+    X_train, y_train,
+    era_indices=era_train,
+    X_val=X_val, y_val=y_val,
+    era_val=era_val,
+)
+print(f"Best iteration: {model.engine_.best_iteration_}")
+```
+
+**Sharpe 木正則化:**
+
+各木のエラ Sharpe 比が閾値を下回る場合、その木の寄与を縮小します。
+
+```
+h̃_m = h_m · SR_m / θ   if SR_m < θ
+h̃_m = h_m               if SR_m ≥ θ
+```
+
+```python
+model = PenguinBoostRegressor(
+    use_sharpe_tree_reg=True,
+    sharpe_reg_threshold=0.0,   # θ: 負の Sharpe の木を縮小
+    n_estimators=500,
+)
+model.fit(X_train, y_train, era_indices=era_train)
+```
+
+**組み合わせ使用（推奨）:**
+
+```python
+model = PenguinBoostRegressor(
+    use_sharpe_early_stopping=True,
+    sharpe_es_patience=40,
+    use_sharpe_tree_reg=True,
+    sharpe_reg_threshold=0.0,
+    early_stopping_rounds=50,   # 従来の損失ベース早期終了と併用可
+)
+```
+
+### 6.12 マルチターゲット補助学習
+
+複数のターゲット（例: Numerai の複数ターゲット列）を補助情報として活用し、汎化能力を向上させます。
+
+**勾配の混合:**
+```
+g_mixed = α · g_main + (1 - α) · (1/K) · Σ g_aux_k
+```
+
+**動的スケジュール（推奨）:** 学習初期に補助ターゲットを重視し（共通特徴量の学習）、後半にメインターゲットへ集中します。
+
+```python
+from penguinboost import MultiTargetAuxiliaryObjective
+from penguinboost.objectives.corr import SpearmanObjective
+
+# メイン + 補助目的関数
+main_obj = SpearmanObjective(temperature=0.5)
+multi_obj = MultiTargetAuxiliaryObjective(
+    main_objective=main_obj,
+    use_schedule=True,
+    alpha_start=0.3,         # 初期: 補助ターゲット重視
+    n_estimators=500,
+    schedule_power=1.5,      # α の増加カーブ
+)
+
+# 補助ターゲット行列を設定
+# Y_aux.shape = (n_train, K)
+multi_obj.set_aux_targets(
+    Y_aux=Y_aux,
+    aux_objectives=[SpearmanObjective() for _ in range(K)],
+)
+
+model = PenguinBoostRegressor(objective=multi_obj, n_estimators=500)
+model.fit(X_train, y_main)
+```
+
+**補助ターゲット選択の指針:**
+
+| 相関 | 推奨度 | 理由 |
+|---|---|---|
+| > 0.5 | 高 | 情報共有が大きく汎化に寄与 |
+| 0.3〜0.5 | 中 | 有効だが `alpha_start` を高めに |
+| < 0.3 | 低 | 学習を引っ張りやすい |
+
+### 6.13 共形予測（Conformal Prediction）
+
+点予測に加えて、数学的に保証されたカバレッジを持つ予測区間を提供します。
+
+```
+P(y ∈ [L_i, U_i]) ≥ 1 - α    （有限サンプル保証）
+```
+
+**基本的な使い方:**
+
+```python
+from penguinboost import ConformalPredictor, EraConformalPredictor
+
+# モデルを学習済みとして
+pred_cal = model.predict(X_cal)
+
+# キャリブレーション
+cp = ConformalPredictor(alpha=0.1, asymmetric=False)
+cp.calibrate(y_cal, pred_cal)
+
+# テスト予測区間
+pred_test = model.predict(X_test)
+lower, upper = cp.predict_interval(pred_test)
+
+# カバレッジ確認
+coverage = cp.empirical_coverage(y_test, pred_test)
+print(f"Coverage: {coverage:.1%} (target: 90.0%)")
+```
+
+**Era 別共形予測（金融データ推奨）:**
+
+```python
+cp_era = EraConformalPredictor(alpha=0.1, min_era_samples=20)
+cp_era.calibrate(y_cal, pred_cal, era_cal)
+
+lower, upper = cp_era.predict_interval(pred_test, era_test)
+```
+
+**非対称区間（`asymmetric=True`）:** 上限・下限の誤差分布が異なる場合（例: 下振れリスクが上振れより大きい場合）に有効。
+
+### 6.14 中立化対応目的関数
+
+Numerai の評価では、予測値を特徴量に対して中立化してから Spearman 相関を測ります。この処理を損失関数内に組み込み、「中立化後の相関」を直接最大化します。
+
+**ハット行列射影（多変量中立化）:**
+```
+ŷ⊥ = (I - H_X) ŷ
+H_X = X(X^TX + λI)^{-1}X^T
+
+勾配: g = P⊥ · g_spearman(ŷ⊥)   [P⊥ = I - H_X]
+```
+
+標準の FeatureNeutralizer（事後処理）と異なり、**学習中に中立化後の評価指標を直接最適化**できます。
+
+```python
+from penguinboost import NeutralizationAwareObjective
+
+obj = NeutralizationAwareObjective(
+    X_ref=X_train,
+    lambda_ridge=1e-4,   # ハット行列の正則化
+)
+
+model = PenguinBoostRegressor(objective=obj, n_estimators=500)
+model.fit(X_train, y_train)
+
+# 事後中立化も組み合わせると二重の効果
+pred = model.predict(X_test)
+# FeatureNeutralizer で更に中立化...
+```
+
+**事後中立化との使い分け:**
+
+| 方法 | タイミング | 用途 |
+|---|---|---|
+| `NeutralizationAwareObjective` | 学習中 | 中立化後の指標を直接最適化 |
+| `FeatureNeutralizer` | 学習後（後処理） | 任意の予測に適用可能 |
+| 両方の組み合わせ | 学習中 + 後処理 | 最大の露出低減 |
+
 ---
 
 ## 7. 金融ユーティリティ
@@ -1534,6 +2126,114 @@ model = PenguinBoostRegressor(
 )
 ```
 
+### 10.7 Numerai 完全最適化（新機能フル活用）
+
+v0.3.4 で追加された金融特化機能をすべて組み合わせた構成。
+
+```python
+import numpy as np
+from penguinboost import (
+    PenguinBoostRegressor,
+    NeutralizationAwareObjective,
+    MultiTargetAuxiliaryObjective,
+    FeatureNeutralizer,
+    EraConformalPredictor,
+)
+from penguinboost.objectives.corr import SpearmanObjective
+
+# ── 目的関数: 中立化対応 Spearman + マルチターゲット ──
+main_obj = NeutralizationAwareObjective(X_ref=X_train, lambda_ridge=1e-4)
+multi_obj = MultiTargetAuxiliaryObjective(
+    main_objective=main_obj,
+    use_schedule=True,
+    alpha_start=0.3,
+    n_estimators=600,
+    schedule_power=1.5,
+)
+multi_obj.set_aux_targets(
+    Y_aux=Y_aux_train,   # shape=(n, K)
+    aux_objectives=[SpearmanObjective() for _ in range(Y_aux_train.shape[1])],
+)
+
+# ── モデル: 全金融特化機能 ──────────────────────────────
+model = PenguinBoostRegressor(
+    objective=multi_obj,
+    n_estimators=600,
+    learning_rate=0.03,
+    max_depth=6,
+
+    # TW-GOSS（時間的重み付きサンプリング）
+    use_tw_goss=True,
+    goss_top_rate=0.2,
+    goss_other_rate=0.1,
+    tw_goss_decay=0.01,
+
+    # Era 適応型勾配クリッピング
+    use_era_gradient_clipping=True,
+    era_clip_multiplier=4.0,
+
+    # 直交勾配射影
+    use_orthogonal_gradients=True,
+    orthogonal_strength=0.3,
+
+    # Era 敵対的分割
+    use_era_adversarial_split=True,
+    era_adversarial_beta=0.05,
+
+    # Era 対応 DART
+    use_era_aware_dart=True,
+    drop_rate=0.1,
+    era_dart_var_scale=20.0,
+
+    # Era Boosting
+    use_era_boosting=True,
+    era_boosting_method='sharpe_reweight',
+
+    # Sharpe 早期終了 + 木正則化
+    use_sharpe_early_stopping=True,
+    sharpe_es_patience=40,
+    use_sharpe_tree_reg=True,
+    sharpe_reg_threshold=0.0,
+
+    random_state=42,
+)
+
+model.fit(
+    X_train, y_main_train,
+    era_indices=era_train,
+    X_val=X_val, y_val=y_val,
+    era_val=era_val,
+)
+
+# ── 予測 + 後処理 ──────────────────────────────────────
+pred_test_raw = model.predict(X_test)
+
+# 後処理中立化
+fn = FeatureNeutralizer(eps=1e-5)
+pred_test = fn.neutralize(pred_test_raw, X_test, proportion=0.5,
+                          per_era=True, eras=era_test)
+
+# ── 共形予測区間（信頼区間付き予測）────────────────────
+cp = EraConformalPredictor(alpha=0.1, min_era_samples=20)
+pred_val_raw = model.predict(X_val)
+cp.calibrate(y_val, pred_val_raw, era_val)
+
+lower, upper = cp.predict_interval(pred_test_raw, era_test)
+coverage = cp.empirical_coverage(y_val, pred_val_raw)
+print(f"Validation coverage: {coverage:.1%}")
+
+# ── 評価 ────────────────────────────────────────────────
+from scipy.stats import spearmanr
+
+era_scores = {
+    e: spearmanr(pred_test[era_test == e], y_test[era_test == e])[0]
+    for e in np.unique(era_test)
+}
+mean_corr = np.mean(list(era_scores.values()))
+sharpe = mean_corr / (np.std(list(era_scores.values())) + 1e-8)
+print(f"Mean Corr: {mean_corr:.4f}, Sharpe: {sharpe:.4f}")
+```
+
 ---
 
 ## 11. チューニングガイド
@@ -1561,12 +2261,18 @@ model = PenguinBoostRegressor(
 | 外れ値が多い | `use_gradient_perturbation=True`, `objective="huber"`, `n_permutations=4` |
 | 時系列の安定性 | `use_temporal_reg=True`, `temporal_rho=0.005〜0.05` |
 | ドメイン知識あり | `monotone_constraints={...}` |
-| リスク管理 | `PenguinBoostQuantileRegressor(objective="cvar", alpha=0.05)` |
+| リスク管理（過剰予測を抑制） | `objective="asymmetric_huber"`, `asymmetric_kappa=2〜3` |
+| リスク管理（VaR/CVaR） | `PenguinBoostQuantileRegressor(objective="cvar", alpha=0.05)` |
+| 予測区間が欲しい | `ConformalPredictor(alpha=0.1)` または `EraConformalPredictor` |
 | Numerai / era 安定性 | `use_era_boosting=True`, `era_boosting_method='sharpe_reweight'` |
-| 特徴量露出を下げたい（学習中） | `use_orthogonal_gradients=True`, `use_feature_exposure_penalty=True` |
+| era Sharpe 最大化 | `MaxSharpeEraObjective()` または `use_sharpe_early_stopping=True` |
+| 特徴量露出を下げたい（学習中） | `use_orthogonal_gradients=True`, `NeutralizationAwareObjective` |
 | 特徴量露出を下げたい（後処理） | `model.neutralize(pred, X, proportion=0.5, per_era=True, eras=eras)` |
+| 最近のエラを重視したい | `use_tw_goss=True`, `tw_goss_decay=0.01〜0.05` |
+| エラ依存の過学習を防ぐ | `use_era_adversarial_split=True`, `era_adversarial_beta=0.05` |
+| 木レベルで汎化制御 | `use_era_aware_dart=True`, `use_sharpe_tree_reg=True` |
+| 補助ターゲットがある | `MultiTargetAuxiliaryObjective(use_schedule=True)` |
 | ランク相関最適化 | `SpearmanObjective(corr_correction=0.5)` |
-| era Sharpe 最大化 | `MaxSharpeEraObjective()` |
 | 計算効率重視 | `use_goss=True`, `efb_threshold=0.05`, `max_bins=64` |
 
 ### 11.3 機能の組み合わせ相性
@@ -1579,7 +2285,15 @@ model = PenguinBoostRegressor(
 | Era Boosting + MaxSharpe 目的関数 | 良好 | Sharpe 最大化を2重に推進 |
 | 直交勾配 + 特徴量露出ペナルティ | 良好 | 学習中の露出抑制を二重に行う |
 | 直交勾配 + 学習後中立化 | 優秀 | 学習中と後処理の両方で露出を制御 |
-| DART + GOSS | 注意 | 両方でサンプリングが発生。片方だけで十分な場合も |
+| NeutralizationAwareObjective + FeatureNeutralizer | 優秀 | 損失最適化と後処理の二段階中立化 |
+| TW-GOSS + Era 敵対的分割 | 良好 | 時間的サンプリング + 汎化分割の相乗効果 |
+| Era 対応 DART + Sharpe 木正則化 | 良好 | 木レベルの汎化制御を二重に行う |
+| Sharpe 早期終了 + Sharpe 木正則化 | 良好 | 安定性の最大化 |
+| MultiTargetAuxiliaryObjective + スケジュール | 良好 | 補助情報を前半で活用、後半でメインに集中 |
+| ConformalPredictor + EraBoostingReweighter | 良好 | 予測区間の精度が era ごとに安定 |
+| DART + GOSS（または TW-GOSS） | 注意 | 両方でサンプリングが発生。片方だけで十分な場合も |
+| TW-GOSS + use_goss | 不可 | `use_tw_goss=True` 時は `goss` が無視される |
+| use_era_aware_dart + use_dart | 不可 | `use_era_aware_dart=True` 時は通常 DART が無視される |
 | 直交勾配射影 + GOSS | 注意 | GOSS で異なるサブセットが選ばれるため射影精度が低下する可能性 |
 | 全拡張機能の組み合わせ | 注意 | 正則化が強すぎて学習不足になりうる。各パラメータを控えめに |
 
@@ -1591,36 +2305,40 @@ model = PenguinBoostRegressor(
 
 ```
 penguinboost/
-├── __init__.py                 # v0.3.0, 12クラスをexport
+├── __init__.py                 # v0.3.4, 22クラスをexport
 ├── sklearn_api.py              # scikit-learn互換API（5クラス）
 ├── utils.py                    # 入力バリデーション
 ├── core/
 │   ├── boosting.py             # BoostingEngine（全機能統合）
-│   ├── tree.py                 # DecisionTree（4種成長戦略、バッチ予測）
-│   ├── histogram.py            # HistogramBuilder（完全ベクトル化）
+│   ├── tree.py                 # DecisionTree（4種成長戦略、era敵対的分割）
+│   ├── histogram.py            # HistogramBuilder（era別ヒストグラム対応）
 │   ├── binning.py              # FeatureBinner + EFB
-│   ├── sampling.py             # GOSSSampler
+│   ├── sampling.py             # GOSSSampler, TemporallyWeightedGOSSSampler
 │   ├── categorical.py          # OrderedTargetEncoder
-│   ├── regularization.py       # AdaptiveRegularizer, GradientPerturber
-│   ├── dart.py                 # DARTManager
+│   ├── regularization.py       # AdaptiveRegularizer, GradientPerturber,
+│   │                             #   EraAdaptiveGradientClipper
+│   ├── dart.py                 # DARTManager, EraAwareDARTManager
 │   ├── monotone.py             # MonotoneConstraintChecker
 │   ├── financial.py            # PurgedKFold, TemporalRegularizer, RegimeDetector
 │   ├── neutralization.py       # FeatureNeutralizer, OrthogonalGradientProjector
-│   └── era_boost.py            # EraBoostingReweighter, EraMetrics
+│   ├── era_boost.py            # EraBoostingReweighter, EraMetrics
+│   └── conformal.py            # ConformalPredictor, EraConformalPredictor
 ├── objectives/
 │   ├── __init__.py             # OBJECTIVE_REGISTRY
-│   ├── regression.py           # MSE, MAE, Huber
+│   ├── regression.py           # MSE, MAE, Huber, AsymmetricHuberObjective
 │   ├── classification.py       # BinaryLogloss, Softmax
 │   ├── ranking.py              # LambdaRank
 │   ├── survival.py             # Cox PH
 │   ├── quantile.py             # Quantile, CVaR
-│   └── corr.py                 # SpearmanObjective, MaxSharpeEraObjective,
-│                                 #   FeatureExposurePenalizedObjective
+│   ├── corr.py                 # SpearmanObjective, MaxSharpeEraObjective,
+│   │                             #   FeatureExposurePenalizedObjective,
+│   │                             #   NeutralizationAwareObjective
+│   └── multi_target.py         # MultiTargetAuxiliaryObjective
 ├── metrics/
 │   ├── __init__.py
 │   └── metrics.py              # 11種のメトリクス + METRIC_REGISTRY
 └── tests/
-    └── test_penguinboost.py     # 98テスト
+    └── test_penguinboost.py     # 173テスト
 ```
 
 ### 12.2 学習フロー
@@ -1635,15 +2353,19 @@ fit() 呼び出し
   ├─ OrthogonalGradientProjector.fit() — (X^TX+εI)^{-1} を事前計算
   ├─ EraBoostingReweighter の初期化
   ├─ 特徴量露出ペナルティの事前計算 (X_centered, X_std)
-  ├─ MaxSharpeEraObjective に era_indices を設定
+  ├─ MaxSharpeEraObjective / NeutralizationAwareObjective に era_indices を設定
+  ├─ era_indices → 整数エラ ID (_era_int_ids) に変換（era 系機能の事前計算）
   │
   └─ for iteration in range(n_estimators):
        │
-       ├─ [DART] 既存木をドロップ → 予測値を調整
+       ├─ [Era-aware DART / DART] 既存木をドロップ → 予測値を調整
        │
        ├─ 勾配・ヘシアン計算 (objective.gradient/hessian)
+       │   └─ [MultiTargetAuxiliaryObjective] α·g_main + (1-α)·mean(g_aux)
        │
        ├─ [時間的正則化] 勾配に temporal gradient を加算
+       │
+       ├─ [Era 適応型勾配クリッピング] エラ別 MAD でクリッピング
        │
        ├─ [Era Boosting] era ごとの Spearman で勾配を重み付け
        │
@@ -1653,7 +2375,8 @@ fit() 呼び出し
        │
        ├─ [勾配摂動] クリッピング + ガウスノイズ
        │
-       ├─ [GOSS] 勾配ベースサンプリング
+       ├─ [TW-GOSS] 時間的重み付き勾配ベースサンプリング
+       │   or [GOSS] 標準勾配ベースサンプリング
        │   or [サブサンプリング] ランダム行サンプリング
        │
        ├─ [Ordered Boosting] K個の順列で勾配推定 → 中央値集約
@@ -1663,14 +2386,21 @@ fit() 呼び出し
        ├─ 木の構築 (DecisionTree.build)
        │   ├─ ヒストグラム構築 (bincount 完全ベクトル化)
        │   ├─ [適応正則化] 子ノードごとの適応λで分割ゲイン計算
+       │   ├─ [Era 敵対的分割] エラ別ヒストグラム → 分散ペナルティ付き利得
        │   ├─ [単調制約] 制約違反の分割を棄却
        │   └─ [ハイブリッド成長] symmetric → leafwise切り替え
        │
-       ├─ [DART] 新しい木にスケールファクター適用
+       ├─ [Era-aware DART] 木の分散を記録 (record_tree_era_variance)
+       │
+       ├─ [DART / Era-aware DART] 新しい木にスケールファクター適用
+       │
+       ├─ [Sharpe 木正則化] SR < threshold の木を縮小
        │
        ├─ 予測値を更新 (バッチベクトル化)
        │
-       └─ [早期停止] バリデーションスコア監視
+       ├─ [Sharpe 早期終了] 検証 Sharpe 比を監視
+       │
+       └─ [損失ベース早期終了] バリデーションスコア監視
 ```
 
 ### 12.3 数学的背景
@@ -1748,6 +2478,80 @@ R(P) = λ · Σ_k corr(P, X_k)²
 
 ```
 η_new = η / (1 + |dropped|)
+```
+
+#### Era 対応 DART ドロップ確率
+
+```
+p_drop(m) = σ(s · (V_m - median(V)))
+
+  V_m = Var_era(ρ_S(h_m(X_e), Y_e))   [木 m のエラ別 Spearman 相関の分散]
+  s   = era_dart_var_scale              [シグモイドスケール]
+```
+
+#### TW-GOSS 複合重み
+
+```
+w_i = |g_i| · exp(-λ · (t_max - t_i))
+
+  λ     = tw_goss_decay
+  t_i   = サンプル i のエラ番号（時間インデックス）
+  t_max = 最新エラのインデックス
+```
+
+#### Era 敵対的分割利得
+
+```
+Gain_robust(k,b) = Gain(k,b) - β · [Var_era(v*_L) + Var_era(v*_R)]
+
+  v*_{e,L} = -G_{e,L} / (H_{e,L} + λ)   [エラ e での左ノード最適葉値]
+  β        = era_adversarial_beta
+```
+
+#### Era 適応型勾配クリッピング
+
+```
+g_clipped_i = sign(g_i) · min(|g_i|, c · MAD_{e_i} + ε)
+
+  MAD_e = median_{i: e_i=e}(|g_i - median_e(g)|)
+  c     = era_clip_multiplier
+```
+
+#### 非対称 Huber 損失（r = ŷ - y）
+
+```
+L(r) = ½r²                           r ≤ δ   （二次領域）
+L(r) = κ(δ|r| - ½δ²)                r > δ   （線形・過剰予測ゾーン）
+
+g(r) = r          （r ≤ δ）
+g(r) = +κ·δ       （r > δ: 定数正勾配→予測を引き下げる方向）
+```
+
+#### 中立化対応目的関数
+
+```
+P⊥ = I - X(X^TX + λI)^{-1}X^T
+ŷ⊥ = P⊥ ŷ
+L  = -ρ_S(ŷ⊥, y)
+
+勾配: g = P⊥ · g_spearman(ŷ⊥)   [連鎖律: P⊥^T = P⊥]
+```
+
+#### マルチターゲット混合勾配
+
+```
+g_mixed = α(t) · g_main + (1 - α(t)) · (1/K) Σ_k g_aux_k
+
+  α(t) = α_start + (α_end - α_start) · (t/M)^p   [動的スケジュール]
+```
+
+#### 共形予測区間
+
+```
+q = Quantile({s_i}, ⌈(n_cal+1)(1-α)⌉/n_cal)   [有限サンプル補正]
+
+  s_i = |y_i - ŷ_i|   [キャリブレーションスコア]
+  区間: [ŷ - q, ŷ + q]
 ```
 
 #### Quantile / CVaR 損失

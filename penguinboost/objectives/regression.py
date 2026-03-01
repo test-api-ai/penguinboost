@@ -68,3 +68,77 @@ class HuberObjective:
 
     def transform(self, pred):
         return pred
+
+
+class AsymmetricHuberObjective:
+    """Asymmetric Huber loss for financial return prediction.
+
+    Applies heavier-than-quadratic penalty when the model *over*predicts
+    returns (residual r = ŷ - y > δ), matching the asymmetric risk profile
+    of financial portfolios where being too optimistic is more costly.
+
+    Mathematical definition
+    -----------------------
+    Let r = ŷ - y (signed residual, positive = overprediction).
+
+        L(r) = { ½ r²                          if  r ≤ δ
+               { κ · (δ|r| - ½δ²)             if  r > δ
+
+    where κ > 1 amplifies the penalty for overprediction and δ is the
+    boundary between the quadratic and linear regimes.
+
+    Gradient (∂L/∂ŷ)
+    -----------------
+        g = r                 if r ≤ δ   (standard MSE gradient)
+        g = κ · δ · sign(r)  if r > δ   (clipped, scaled by κ)
+
+    Since r > δ > 0 in the tail, sign(r) = +1, so g = +κδ (pushes ŷ down).
+
+    Hessian (∂²L/∂ŷ²)
+    ------------------
+        h = 1.0  (quadratic region)
+        h = 1e-3 (linear region – small but positive for tree stability)
+
+    Parameters
+    ----------
+    delta : float
+        Huber boundary between quadratic and linear regime (default 1.0).
+    kappa : float
+        Downside penalty multiplier κ > 1 for overprediction (default 2.0).
+    """
+
+    def __init__(self, delta=1.0, kappa=2.0):
+        if kappa < 1.0:
+            raise ValueError(f"kappa must be >= 1.0, got {kappa}")
+        self.delta = delta
+        self.kappa = kappa
+
+    def init_score(self, y):
+        return float(np.median(y))
+
+    def gradient(self, y, pred):
+        """Asymmetric Huber gradient.
+
+        Quadratic for r ≤ δ (both slight over- and underprediction treated
+        equally); scaled linear slope κδ for r > δ (heavy overprediction).
+        """
+        r = pred - y
+        in_quadratic = r <= self.delta
+        g = np.where(in_quadratic, r, self.kappa * self.delta * np.sign(r))
+        return g
+
+    def hessian(self, y, pred):
+        r = pred - y
+        return np.where(r <= self.delta, 1.0, 1e-3).astype(np.float64)
+
+    def loss(self, y, pred):
+        r = pred - y
+        in_quadratic = r <= self.delta
+        return float(np.mean(np.where(
+            in_quadratic,
+            0.5 * r ** 2,
+            self.kappa * (self.delta * np.abs(r) - 0.5 * self.delta ** 2),
+        )))
+
+    def transform(self, pred):
+        return pred
