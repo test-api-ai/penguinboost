@@ -1,4 +1,4 @@
-[![Build and Publish](https://github.com/test-api-ai/penguinboost/actions/workflows/build_publish.yml/badge.svg)](https://github.com/test-api-ai/penguinboost/actions/workflows/build_publish.yml)
+[![Build and Publish](https://github.com/test-api-ai/penguinboost/actions/workflows/build_publish.yml/badge.svg)](https://github.com/test-api-ai/penguinboost/actions/workflows/build_publish.yml)  [![Test](https://github.com/test-api-ai/penguinboost/actions/workflows/test.yml/badge.svg)](https://github.com/test-api-ai/penguinboost/actions/workflows/test.yml)
 
 # PenguinBoost
 
