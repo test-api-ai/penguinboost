@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: penguinboost
-Version: 0.3.4
+Version: 0.3.6
 Summary: Hybrid gradient boosting with built-in resistance to financial overfitting.
 Author-email: "S.I" <test_api_ai@proton.me>
 License: MIT License
