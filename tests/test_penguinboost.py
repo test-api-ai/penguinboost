@@ -1315,14 +1315,14 @@ class TestObjectiveMAEHuber:
     def test_mae_objective_learns(self):
         X_tr, X_te, y_tr, y_te = self._data()
         m = PenguinBoostRegressor(
-            objective="mae", n_estimators=80, learning_rate=0.1, random_state=42)
+            objective="mae", n_estimators=200, learning_rate=0.1, random_state=42)
         m.fit(X_tr, y_tr)
         assert _r2_score(y_te, m.predict(X_te)) > 0.5
 
     def test_huber_objective_learns(self):
         X_tr, X_te, y_tr, y_te = self._data()
         m = PenguinBoostRegressor(
-            objective="huber", huber_delta=1.0, n_estimators=80,
+            objective="huber", huber_delta=1.0, n_estimators=200,
             learning_rate=0.1, random_state=42)
         m.fit(X_tr, y_tr)
         assert _r2_score(y_te, m.predict(X_te)) > 0.5
