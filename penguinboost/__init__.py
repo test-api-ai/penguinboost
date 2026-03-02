@@ -46,7 +46,7 @@ except ImportError:
     def set_num_threads(n): pass      # noqa: E704
     def get_num_threads(): return 1   # noqa: E704
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
 __all__ = [
     # sklearn 推定器
     "PenguinBoostClassifier",

@@ -7,7 +7,12 @@ class QuantileObjective:
     """Quantile (pinball) loss objective.
 
     Loss: L(y, f) = alpha * max(y - f, 0) + (1 - alpha) * max(f - y, 0)
-    Gradient: g_i = alpha - 1{y_i < pred_i}
+
+    Gradient ∂L/∂f:
+      f > y  →  +(1 - alpha)   [over-prediction: push f down]
+      f < y  →  -alpha          [under-prediction: push f up]
+      f == y →  -alpha (limiting value)
+
     Hessian: h_i = 1.0 (constant, as pinball loss is piecewise linear)
 
     Parameters
@@ -24,8 +29,13 @@ class QuantileObjective:
         return float(np.quantile(y, self.alpha))
 
     def gradient(self, y, pred):
-        """Compute gradient of quantile loss."""
-        return np.where(y < pred, self.alpha - 1.0, self.alpha)
+        """Compute gradient of quantile loss.
+
+        Using XGBoost/LightGBM sign convention: gradient = ∂L/∂pred.
+        Leaf value formula is -G/(H + λ), so positive gradient → negative leaf
+        (pushes prediction down), negative gradient → positive leaf (pushes up).
+        """
+        return np.where(y < pred, 1.0 - self.alpha, -self.alpha)
 
     def hessian(self, y, pred):
         """Constant hessian (second derivative of piecewise linear is 0, use 1 for stability)."""
@@ -41,6 +51,17 @@ class QuantileObjective:
     def transform(self, raw_predictions):
         """No transformation needed for quantile regression."""
         return raw_predictions
+
+    def compute_leaf_value(self, residuals):
+        """Optimal quantile leaf value: alpha-quantile of (y - pred) in leaf.
+
+        argmin_c  Σ [α·max(r_i−c,0) + (1−α)·max(c−r_i,0)]  =  quantile(r, α)
+
+        The constant-hessian Newton step −G/(H+λ) is bounded in [−1,1] and
+        cannot represent the true scale of the target; this direct quantile
+        estimate gives the correct optimal leaf correction.
+        """
+        return float(np.quantile(residuals, self.alpha))
 
 
 class CVaRObjective:

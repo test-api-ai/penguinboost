@@ -24,6 +24,32 @@ from penguinboost.core.monotone import MonotoneConstraintChecker
 from penguinboost.core.financial import TemporalRegularizer
 
 
+def _override_leaf_values(node, residuals, objective):
+    """Walk the tree and replace each leaf's value with the objective-optimal estimate.
+
+    Called when the objective provides ``compute_leaf_value(residuals)``.
+    This is required for non-smooth losses (MAE, Huber) where the standard
+    Newton step  −G/(H + λ)  gives systematically biased leaf values due to
+    the constant or near-zero hessian approximation.
+
+    Parameters
+    ----------
+    node : TreeNode
+        Root (or any subtree root) of the decision tree.
+    residuals : np.ndarray, shape (n_samples,)
+        Per-sample residuals y − current_predictions (full dataset).
+    objective : object
+        Must implement ``compute_leaf_value(residuals_in_leaf) → float``.
+    """
+    if node.left is None:  # leaf node
+        leaf_res = residuals[node.sample_indices]
+        if len(leaf_res) > 0:
+            node.value = objective.compute_leaf_value(leaf_res)
+        return
+    _override_leaf_values(node.left,  residuals, objective)
+    _override_leaf_values(node.right, residuals, objective)
+
+
 def _era_to_int(era_indices):
     """Convert arbitrary era labels to consecutive integers 0..n_eras-1."""
     labels = np.unique(era_indices)
@@ -534,6 +560,14 @@ class BoostingEngine:
                 era_adversarial_data=era_adv_data,
             )
             tree.build(X_tree, weighted_gradients, weighted_hessians)
+
+            # Non-smooth objectives (MAE, Huber): replace leaf values with the
+            # true L1/Huber-optimal estimate (median / mean of residuals).
+            # The Newton step −G/(H+λ) with constant hessian saturates at ±1
+            # for MAE and can diverge for Huber when H≈0.
+            if hasattr(objective, 'compute_leaf_value'):
+                residuals_all = (y if y.ndim == 1 else y[:, 0]) - current_predictions
+                _override_leaf_values(tree.root, residuals_all, objective)
 
             # 予測用に列マッピングを保存
             tree._col_indices = col_indices

@@ -532,11 +532,12 @@ class TestQuantileObjectives:
         y = np.array([1.0, 2.0, 3.0])
         pred = np.array([1.5, 1.5, 3.5])
         g = obj.gradient(y, pred)
-        # y < pred for y=1.0: g = 0.5 - 1 = -0.5
-        # y > pred for y=2.0: g = 0.5
-        # y < pred for y=3.0: g = 0.5 - 1 = -0.5
-        assert g[0] == pytest.approx(-0.5)
-        assert g[1] == pytest.approx(0.5)
+        # Sign convention: gradient = ∂L/∂pred; leaf = -G/(H+λ)
+        # pred > y (y=1.0, pred=1.5, over-prediction): g = +(1-alpha) = +0.5  → leaf < 0, pred goes down ✓
+        # pred < y (y=2.0, pred=1.5, under-prediction): g = -alpha     = -0.5  → leaf > 0, pred goes up ✓
+        # pred > y (y=3.0, pred=3.5, over-prediction): g = +(1-alpha) = +0.5
+        assert g[0] == pytest.approx(0.5)
+        assert g[1] == pytest.approx(-0.5)
 
     def test_quantile_init_score(self):
         obj = QuantileObjective(alpha=0.1)

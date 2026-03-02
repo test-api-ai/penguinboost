@@ -23,7 +23,13 @@ class MSEObjective:
 
 
 class MAEObjective:
-    """Mean Absolute Error (L1) objective."""
+    """Mean Absolute Error (L1) objective.
+
+    Gradient / hessian are used only for split-finding (the same as LightGBM).
+    Leaf values are computed via ``compute_leaf_value`` (weighted median of
+    residuals), which is the true L1-optimal leaf update and avoids the ±1
+    saturation that occurs when the Newton step is used with constant hessian.
+    """
 
     def init_score(self, y):
         return np.median(y)
@@ -39,6 +45,11 @@ class MAEObjective:
 
     def transform(self, pred):
         return pred
+
+    @staticmethod
+    def compute_leaf_value(residuals):
+        """Optimal L1 leaf value: median of (y - pred) for samples in leaf."""
+        return float(np.median(residuals))
 
 
 class HuberObjective:
@@ -57,8 +68,13 @@ class HuberObjective:
         return grad
 
     def hessian(self, y, pred):
+        # Use delta / |r| in the linear region instead of 0.0.
+        # This keeps split-gain computation numerically stable and gives the
+        # IRLS-equivalent hessian that produces sensible leaf values even when
+        # all samples are in the linear region.
         diff = pred - y
-        return np.where(np.abs(diff) <= self.delta, 1.0, 0.0).astype(np.float64)
+        linear_h = self.delta / (np.abs(diff) + 1e-8)
+        return np.where(np.abs(diff) <= self.delta, 1.0, linear_h).astype(np.float64)
 
     def loss(self, y, pred):
         diff = np.abs(y - pred)
@@ -68,6 +84,15 @@ class HuberObjective:
 
     def transform(self, pred):
         return pred
+
+    def compute_leaf_value(self, residuals):
+        """Approximate optimal Huber leaf value: mean of residuals.
+
+        For the quadratic region this is exact (same as MSE optimal).
+        For the linear region it is a reasonable first-order approximation
+        that avoids the ±delta saturation of the constant-hessian Newton step.
+        """
+        return float(np.mean(residuals))
 
 
 class AsymmetricHuberObjective:
